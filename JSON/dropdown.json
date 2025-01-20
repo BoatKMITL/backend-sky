@@ -1,0 +1,19 @@
+{
+  "channels": [
+    "Line OA",
+    "Line ส่วนตัว",
+    "Facebook Page",
+    "Facebook ส่วนตัว"
+  ],
+  "categories": [
+    "ลูกค้าทั่วไป",
+    "พ่อค้าแม่ค้า",
+    "บริษัทขนส่ง"
+  ],
+  "levels": [
+    "Classic",
+    "Silver",
+    "Gold",
+    "Platinum"
+  ]
+}
