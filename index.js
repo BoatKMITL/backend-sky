@@ -1806,10 +1806,6 @@ app.post("/uploadDocument", uploadDocument.single("document"), (req, res) => {
     }
 });
 
-app.get('*', (req,res)=>{
-    res.sendFile(path.resolve(__dirname, "index.html")) 
-})
-
 // มั่วอันนี้
 app.get("/searchByTracking", async (req, res) => {
     const { trackingNumber } = req.query;
