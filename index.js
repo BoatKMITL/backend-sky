@@ -1832,11 +1832,11 @@ app.get("/searchByTracking", async (req, res) => {
     }
 });
 
-app.use('/sky4you', express.static(path.join(__dirname, 'sky4you')));
+// app.use('/sky4you', express.static(path.join(__dirname, 'sky4you')));
 
-app.get('/sky4you/*', (req, res) => {
-    res.sendFile(path.resolve(__dirname, 'sky4you', 'index.html'));
-});
+// app.get('/sky4you/*', (req, res) => {
+//     res.sendFile(path.resolve(__dirname, 'sky4you', 'index.html'));
+// });
 
 const PORT = 3001;
 app.listen(PORT, () => {
