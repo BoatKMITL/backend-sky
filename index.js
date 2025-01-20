@@ -1,10 +1,19 @@
 const express = require('express');
 const mysql = require('mysql');
 const cors = require('cors');
+const path = require("path");
 const fs = require("fs");
+const bodyParser = require('body-parser');
 const app = express();
 app.use(cors());
-app.use(express.json());
+app.use(bodyParser.urlencoded({ extended: false }));
+app.use(bodyParser.json());
+
+app.use(express.static(path.join(__dirname)));
+app.use('/', (req, res) => {
+    res.sendFile(path.join(__dirname, 'index.html'));
+});
+
 
 const db = mysql.createConnection({
     host: "th257.ruk-com.in.th",
@@ -1535,7 +1544,6 @@ app.post("/editcompany_info", (req, res) => {
 //-------------------------------------------Local Management------------------------------------------
 
 const multer = require("multer");
-const path = require("path");
 
 //--------------------------------------------------- IMAGE UPLOAD ---------------------------------------------------
 
@@ -1828,11 +1836,6 @@ app.get("/searchByTracking", async (req, res) => {
     }
 });
 
-app.use('/sky4you', express.static(path.join(__dirname, 'sky4you')));
-
-app.get('/sky4you/*', (req, res) => {
-    res.sendFile(path.resolve(__dirname, 'sky4you', 'index.html'));
-});
 
 const PORT = 3001;
 app.listen(PORT, () => {
