@@ -3,17 +3,9 @@ const mysql = require('mysql');
 const cors = require('cors');
 const path = require("path");
 const fs = require("fs");
-const bodyParser = require('body-parser');
 const app = express();
 app.use(cors());
-app.use(bodyParser.urlencoded({ extended: false }));
-app.use(bodyParser.json());
-
-app.use(express.static(path.join(__dirname)));
-app.use('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'index.html'));
-});
-
+app.use(express.json());
 
 const db = mysql.createConnection({
     host: "th257.ruk-com.in.th",
