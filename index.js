@@ -15,12 +15,19 @@ const db = mysql.createConnection({
     database: "sharebil_sky4you",
 });
 
+const companydb = mysql.createConnection({
+    host: "th257.ruk-com.in.th",
+    user: "sharebil_sky4you",
+    password: "LN5avYu2KUwGDR6Ytreg",
+    port: "3306",
+    database: "sharebil_sky4you",
+});
 // Login-------------------------------------------------------------------------------------------------------------------
 app.post('/login', (req, res) => {
     if (req.body.emp_id !== undefined) {
         const emp_id = req.body.emp_id;
         const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-        db.query(query, [emp_id], (err, results) => {
+        companydb.query(query, [emp_id], (err, results) => {
             if (err) {
                 console.error("Error fetching data:", err.message);
                 res.status(500).json({ error: "Failed to fetch data" });
@@ -48,7 +55,7 @@ app.post('/login', (req, res) => {
         const username = req.body.username;
         const password = req.body.password;
         const query = "SELECT * FROM `employee` WHERE `username` = ? AND `password` = ?";
-        db.query(query, [username, password], (err, results) => {
+        companydb.query(query, [username, password], (err, results) => {
             if (err) {
                 console.error("Error fetching data:", err.message);
                 res.status(500).json({ error: "Failed to fetch data" });
