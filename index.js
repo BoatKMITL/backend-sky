@@ -1450,6 +1450,10 @@ app.post("/editdropdown", (req, res) => {
             res.status(500).json({ error: "Failed to fetch data" });
         } else {
             const filePath = `${results[0].company_name}/dropdown.json`;
+            const dirPath = path.dirname(filePath);
+            if (!fs.existsSync(dirPath)) {
+                fs.mkdirSync(dirPath, { recursive: true });
+            }
             fs.writeFile(filePath, JSON.stringify(processedData, null, 2), (err) => {
                 if (err) {
                     console.error("Error writing to JSON file:", err);
@@ -1470,6 +1474,7 @@ app.get("/price", (req, res) => {
             res.status(500).json({ error: "Failed to fetch data" });
         } else {
             const filePath = `${results[0].company_name}/price.json`;
+            
             fs.readFile(filePath, "utf-8", (err, data) => {
                 if (err) {
                     console.error("Error reading JSON file:", err);
@@ -1492,6 +1497,10 @@ app.post("/editprice", (req, res) => {
             res.status(500).json({ error: "Failed to fetch data" });
         } else {
             const filePath = `${results[0].company_name}/price.json`;
+            const dirPath = path.dirname(filePath);
+            if (!fs.existsSync(dirPath)) {
+                fs.mkdirSync(dirPath, { recursive: true });
+            }
             fs.writeFile(filePath, JSON.stringify(newData, null, 2), (err) => {
                 if (err) {
                     console.error("Error writing to JSON file:", err);
@@ -1533,6 +1542,10 @@ app.post("/editpromotion", (req, res) => {
             res.status(500).json({ error: "Failed to fetch data" });
         } else {
             const filePath = `${results[0].company_name}/promotion.json`;
+            const dirPath = path.dirname(filePath);
+            if (!fs.existsSync(dirPath)) {
+                fs.mkdirSync(dirPath, { recursive: true });
+            }
             fs.writeFile(filePath, JSON.stringify(newData, null, 2), (err) => {
                 if (err) {
                     console.error("Error writing to JSON file:", err);
@@ -1575,6 +1588,10 @@ app.post("/editwarehoussetting", (req, res) => {
             res.status(500).json({ error: "Failed to fetch data" });
         } else {
             const filePath = `${results[0].company_name}/warehouse.json`;
+            const dirPath = path.dirname(filePath);
+            if (!fs.existsSync(dirPath)) {
+                fs.mkdirSync(dirPath, { recursive: true });
+            }
             fs.writeFile(filePath, JSON.stringify(newData, null, 2), (err) => {
                 if (err) {
                     console.error("Error writing to JSON file:", err);
@@ -1595,7 +1612,6 @@ app.get("/employee", (req, res) => {
             res.status(500).json({ error: "Failed to fetch data" });
         } else {
             const query = "SELECT * FROM `employee` WHERE `company_name` = ?";
-            console.log(results[0].company_name)
             companydb.query(query, [results[0].company_name], (err, results) => {
                 if (err) {
                     console.error("Error fetching data:", err.message);
@@ -1634,7 +1650,7 @@ app.post('/addemployee', (req, res) => {
             console.error("Error fetching data:", err.message);
             res.status(500).json({ error: "Failed to fetch data" });
         } else {
-            const query1 = "INSERT INTO `employee` (`username`, `emp_name`, `password`, `emp_database`, `emp_datapass`, `company_name`, `role`, `eimg`, `emp_date`) VALUES (?, ?, ?, ?, NULL, ?);";
+            const query1 = "INSERT INTO `employee` (`username`, `emp_name`, `password`, `emp_database`, `emp_datapass`, `company_name`, `role`, `eimg`, `emp_date`) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?);";
             companydb.query(query1, [username, emp_name, password, results[0].emp_database, results[0].emp_datapass, results[0].company_name, role, emp_date], (err, results) => {
                 if (err) {
                     console.error("Error fetching data:", err.message);
@@ -1686,6 +1702,10 @@ app.post("/editcompany_info", (req, res) => {
             res.status(500).json({ error: "Failed to fetch data" });
         } else {
             const filePath = `${results[0].company_name}/company_info.json`;
+            const dirPath = path.dirname(filePath);
+            if (!fs.existsSync(dirPath)) {
+                fs.mkdirSync(dirPath, { recursive: true });
+            }
             const newData = req.body.formData;
             fs.writeFile(filePath, JSON.stringify(newData, null, 2), (err) => {
                 if (err) {
