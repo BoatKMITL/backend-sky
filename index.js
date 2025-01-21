@@ -9,27 +9,88 @@ app.use(express.json());
 
 const db = mysql.createConnection({
     host: "th257.ruk-com.in.th",
-    user: "sharebil_test",
-    password: "123456789",
+    user: "sharebil_sky4you",
+    password: "LN5avYu2KUwGDR6Ytreg",
     port: "3306",
-    database: "sharebil_test",
+    database: "sharebil_sky4you",
 });
 
 // Login-------------------------------------------------------------------------------------------------------------------
 app.post('/login', (req, res) => {
-    const username = req.body.username;
-    const password = req.body.password;
-    const query = "SELECT * FROM `employee` WHERE `username` = ? AND `password` = ?";
-    db.query(query, [username, password], (err, results) => {
-        if (err) {
-            console.error("Error fetching data:", err.message);
-            res.status(500).json({ error: "Failed to fetch data" });
-        } else {
-            res.json(results);
-        }
-    });
+    if (req.body.emp_id !== undefined) {
+        const emp_id = req.body.emp_id;
+        const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
+        db.query(query, [emp_id], (err, results) => {
+            if (err) {
+                console.error("Error fetching data:", err.message);
+                res.status(500).json({ error: "Failed to fetch data" });
+            } else {
+                const newDatabase = results[0].emp_database; // Example of dynamic DB
+                const newUser = results[0].emp_database; // Example of dynamic user
+                const newPassword = results[0].emp_datapass; // Example of dynamic password
+                db.changeUser(
+                    {
+                        user: newUser,
+                        password: newPassword,
+                        database: newDatabase,
+                    },
+                    (changeErr) => {
+                        if (changeErr) {
+                            console.error("Error changing database:", changeErr.message);
+                            return res.status(500).json({ error: "Failed to switch database" });
+                        }
+                        res.json(results);
+                    }
+                );
+            }
+        });
+    } else {
+        const username = req.body.username;
+        const password = req.body.password;
+        const query = "SELECT * FROM `employee` WHERE `username` = ? AND `password` = ?";
+        db.query(query, [username, password], (err, results) => {
+            if (err) {
+                console.error("Error fetching data:", err.message);
+                res.status(500).json({ error: "Failed to fetch data" });
+            } else {
+                const newDatabase = results[0].emp_database; // Example of dynamic DB
+                const newUser = results[0].emp_database; // Example of dynamic user
+                const newPassword = results[0].emp_datapass; // Example of dynamic password
+                db.changeUser(
+                    {
+                        user: newUser,
+                        password: newPassword,
+                        database: newDatabase,
+                    },
+                    (changeErr) => {
+                        if (changeErr) {
+                            console.error("Error changing database:", changeErr.message);
+                            return res.status(500).json({ error: "Failed to switch database" });
+                        }
+                        res.json(results);
+                    }
+                );
+            }
+        });
+    }
 });
 
+app.post('/logout', (req, res) => {
+    db.changeUser(
+        {
+            user: "sharebil_sky4you",
+            password: "LN5avYu2KUwGDR6Ytreg",
+            database: "sharebil_sky4you",
+        },
+        (changeErr) => {
+            if (changeErr) {
+                console.error("Error changing database:", changeErr.message);
+                return res.status(500).json({ error: "Failed to switch database" });
+            }
+            res.json("logout finish");
+        }
+    );
+});
 // Home-------------------------------------------------------------------------------------------------------------------
 app.get('/customers', (req, res) => {
     const query = "SELECT c.*, COUNT(p.tracking_number) AS package_count FROM customers AS c LEFT JOIN packages AS p ON c.customer_id = p.customer_id WHERE NOT EXISTS (SELECT 1 FROM items AS i WHERE i.tracking_number = p.tracking_number GROUP BY i.tracking_number HAVING MIN(i.item_status) = 1 AND MAX(i.item_status) = 1) GROUP BY c.customer_id ORDER BY c.customer_date DESC;";
