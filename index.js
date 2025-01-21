@@ -1595,6 +1595,7 @@ app.get("/employee", (req, res) => {
             res.status(500).json({ error: "Failed to fetch data" });
         } else {
             const query = "SELECT * FROM `employee` WHERE `company_name` = ?";
+            console.log(results[0].company_name)
             companydb.query(query, [results[0].company_name], (err, results) => {
                 if (err) {
                     console.error("Error fetching data:", err.message);
