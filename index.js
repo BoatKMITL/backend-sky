@@ -1391,31 +1391,48 @@ app.post('/editsendaddr', (req, res) => {
 
 // Setting-------------------------------------------------------------------------------------------------------------------
 app.get("/company_info", (req, res) => {
-    const filePath = "JSON/company_info.json";
-    fs.readFile(filePath, "utf-8", (err, data) => {
+    const { emp_id } = req.query;
+    const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
+    companydb.query(query, [emp_id], (err, results) => {
         if (err) {
-            console.error("Error reading JSON file:", err);
-            res.status(500).json({ error: "Failed to load company information" });
+            console.error("Error fetching data:", err.message);
+            res.status(500).json({ error: "Failed to fetch data" });
         } else {
-            res.json(JSON.parse(data));
+            const filePath = `${results[0].company_name}/company_info.json`;
+            fs.readFile(filePath, "utf-8", (err, data) => {
+                if (err) {
+                    console.error("Error reading JSON file:", err);
+                    res.status(500).json({ error: "Failed to load company information" });
+                } else {
+                    res.json(JSON.parse(data));
+                }
+            });
         }
     });
 });
 
 app.get("/dropdown", (req, res) => {
-    const filePath = "JSON/dropdown.json";
-    fs.readFile(filePath, "utf-8", (err, data) => {
+    const { emp_id } = req.query;
+    const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
+    companydb.query(query, [emp_id], (err, results) => {
         if (err) {
-            console.error("Error reading JSON file:", err);
-            res.status(500).json({ error: "Failed to load company information" });
+            console.error("Error fetching data:", err.message);
+            res.status(500).json({ error: "Failed to fetch data" });
         } else {
-            res.json(JSON.parse(data));
+            const filePath = `${results[0].company_name}/dropdown.json`;
+            fs.readFile(filePath, "utf-8", (err, data) => {
+                if (err) {
+                    console.error("Error reading JSON file:", err);
+                    res.status(500).json({ error: "Failed to load company information" });
+                } else {
+                    res.json(JSON.parse(data));
+                }
+            });
         }
     });
 });
 
 app.post("/editdropdown", (req, res) => {
-    const filePath = "JSON/dropdown.json";
     const newData = req.body;
     const uniqueChannels = [...new Set(newData.channels.map(channel => channel.name))];
     const uniqueCategories = [...new Set(newData.categories.map(channel => channel.name))];
@@ -1425,106 +1442,167 @@ app.post("/editdropdown", (req, res) => {
         categories: uniqueCategories,
         levels: uniqueLevels
     };
-    fs.writeFile(filePath, JSON.stringify(processedData, null, 2), (err) => {
+    const emp_id = req.body.emp_id;
+    const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
+    companydb.query(query, [emp_id], (err, results) => {
         if (err) {
-            console.error("Error writing to JSON file:", err);
+            console.error("Error fetching data:", err.message);
+            res.status(500).json({ error: "Failed to fetch data" });
         } else {
-            res.send("Values Edited");
+            const filePath = `${results[0].company_name}/dropdown.json`;
+            fs.writeFile(filePath, JSON.stringify(processedData, null, 2), (err) => {
+                if (err) {
+                    console.error("Error writing to JSON file:", err);
+                } else {
+                    res.send("Values Edited");
+                }
+            });
         }
     });
 });
 
 app.get("/price", (req, res) => {
-    const filePath = "JSON/price.json";
-    fs.readFile(filePath, "utf-8", (err, data) => {
+    const { emp_id } = req.query;
+    const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
+    companydb.query(query, [emp_id], (err, results) => {
         if (err) {
-            console.error("Error reading JSON file:", err);
-            res.status(500).json({ error: "Failed to load company information" });
+            console.error("Error fetching data:", err.message);
+            res.status(500).json({ error: "Failed to fetch data" });
         } else {
-            res.json(JSON.parse(data));
+            const filePath = `${results[0].company_name}/price.json`;
+            fs.readFile(filePath, "utf-8", (err, data) => {
+                if (err) {
+                    console.error("Error reading JSON file:", err);
+                    res.status(500).json({ error: "Failed to load company information" });
+                } else {
+                    res.json(JSON.parse(data));
+                }
+            });
         }
     });
 });
 
 app.post("/editprice", (req, res) => {
-    const filePath = "JSON/price.json";
+    const emp_id = req.body.emp_id;
     const newData = req.body.updatedPricing;
-    fs.writeFile(filePath, JSON.stringify(newData, null, 2), (err) => {
+    const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
+    companydb.query(query, [emp_id], (err, results) => {
         if (err) {
-            console.error("Error writing to JSON file:", err);
+            console.error("Error fetching data:", err.message);
+            res.status(500).json({ error: "Failed to fetch data" });
         } else {
-            res.send("Values Edited");
+            const filePath = `${results[0].company_name}/price.json`;
+            fs.writeFile(filePath, JSON.stringify(newData, null, 2), (err) => {
+                if (err) {
+                    console.error("Error writing to JSON file:", err);
+                } else {
+                    res.send("Values Edited");
+                }
+            });
         }
     });
 });
 app.get("/promotion", (req, res) => {
-    const filePath = "JSON/promotion.json";
-    fs.readFile(filePath, "utf-8", (err, data) => {
+    const { emp_id } = req.query;
+    const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
+    companydb.query(query, [emp_id], (err, results) => {
         if (err) {
-            console.error("Error reading JSON file:", err);
-            res.status(500).json({ error: "Failed to load company information" });
+            console.error("Error fetching data:", err.message);
+            res.status(500).json({ error: "Failed to fetch data" });
         } else {
-            res.json(JSON.parse(data));
+            const filePath = `${results[0].company_name}/promotion.json`;
+            fs.readFile(filePath, "utf-8", (err, data) => {
+                if (err) {
+                    console.error("Error reading JSON file:", err);
+                    res.status(500).json({ error: "Failed to load company information" });
+                } else {
+                    res.json(JSON.parse(data));
+                }
+            });
         }
     });
 });
 
 app.post("/editpromotion", (req, res) => {
-    const filePath = "JSON/promotion.json";
+    const emp_id = req.body.emp_id;
     const newData = req.body.updatedPromotions;
-    fs.writeFile(filePath, JSON.stringify(newData, null, 2), (err) => {
+    const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
+    companydb.query(query, [emp_id], (err, results) => {
         if (err) {
-            console.error("Error writing to JSON file:", err);
+            console.error("Error fetching data:", err.message);
+            res.status(500).json({ error: "Failed to fetch data" });
         } else {
-            res.send("Values Edited");
+            const filePath = `${results[0].company_name}/promotion.json`;
+            fs.writeFile(filePath, JSON.stringify(newData, null, 2), (err) => {
+                if (err) {
+                    console.error("Error writing to JSON file:", err);
+                } else {
+                    res.send("Values Edited");
+                }
+            });
         }
     });
 });
 
 app.get("/warehouse", (req, res) => {
-    const filePath = "JSON/warehouse.json";
-    fs.readFile(filePath, "utf-8", (err, data) => {
+    const { emp_id } = req.query;
+    const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
+    companydb.query(query, [emp_id], (err, results) => {
         if (err) {
-            console.error("Error reading JSON file:", err);
-            res.status(500).json({ error: "Failed to load company information" });
+            console.error("Error fetching data:", err.message);
+            res.status(500).json({ error: "Failed to fetch data" });
         } else {
-            res.json(JSON.parse(data));
+            const filePath = `${results[0].company_name}/warehouse.json`;
+            fs.readFile(filePath, "utf-8", (err, data) => {
+                if (err) {
+                    console.error("Error reading JSON file:", err);
+                    res.status(500).json({ error: "Failed to load company information" });
+                } else {
+                    res.json(JSON.parse(data));
+                }
+            });
         }
     });
 });
 
 app.post("/editwarehoussetting", (req, res) => {
-    const filePath = "JSON/warehouse.json";
+    const emp_id = req.body.emp_id;
     const newData = req.body;
-    fs.writeFile(filePath, JSON.stringify(newData, null, 2), (err) => {
+    const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
+    companydb.query(query, [emp_id], (err, results) => {
         if (err) {
-            console.error("Error writing to JSON file:", err);
+            console.error("Error fetching data:", err.message);
+            res.status(500).json({ error: "Failed to fetch data" });
         } else {
-            res.send("Values Edited");
-        }
-    });
-});
-
-app.get("/category", (req, res) => {
-    const filePath = "JSON/category.json";
-    fs.readFile(filePath, "utf-8", (err, data) => {
-        if (err) {
-            console.error("Error reading JSON file:", err);
-            res.status(500).json({ error: "Failed to load company information" });
-        } else {
-            res.json(JSON.parse(data));
+            const filePath = `${results[0].company_name}/warehouse.json`;
+            fs.writeFile(filePath, JSON.stringify(newData, null, 2), (err) => {
+                if (err) {
+                    console.error("Error writing to JSON file:", err);
+                } else {
+                    res.send("Values Edited");
+                }
+            });
         }
     });
 });
 
 app.get("/employee", (req, res) => {
-    const query = "SELECT * FROM `employee`";
-    db.query(query, (err, results) => {
+    const { emp_id } = req.query;
+    const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
+    companydb.query(query, [emp_id], (err, results) => {
         if (err) {
             console.error("Error fetching data:", err.message);
             res.status(500).json({ error: "Failed to fetch data" });
         } else {
-            res.json(results);
+            const query = "SELECT * FROM `employee` WHERE `company_name` = ?";
+            companydb.query(query, [results[0].company_name], (err, results) => {
+                if (err) {
+                    console.error("Error fetching data:", err.message);
+                    res.status(500).json({ error: "Failed to fetch data" });
+                } else {
+                    res.json(results);
+                }
+            });
         }
     });
 });
@@ -1532,7 +1610,7 @@ app.get("/employee", (req, res) => {
 app.get("/employeeinfo", (req, res) => {
     const { id } = req.query;
     const query = "SELECT * FROM `employee` WHERE `employee`.`emp_id` = ?;";
-    db.query(query, [id], (err, results) => {
+    companydb.query(query, [id], (err, results) => {
         if (err) {
             console.error("Error fetching data:", err.message);
             res.status(500).json({ error: "Failed to fetch data" });
@@ -1548,13 +1626,22 @@ app.post('/addemployee', (req, res) => {
     const role = req.body.role;
     const password = req.body.password;
     const emp_date = req.body.emp_date;
-    const query1 = "INSERT INTO `employee` (`username`, `emp_name`, `password`, `role`, `eimg`, `emp_date`) VALUES (?, ?, ?, ?, NULL, ?);";
-    db.query(query1, [username, emp_name, password, role, emp_date], (err, results) => {
+    const emp_id = req.body.emp_id;
+    const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
+    companydb.query(query, [emp_id], (err, results) => {
         if (err) {
             console.error("Error fetching data:", err.message);
             res.status(500).json({ error: "Failed to fetch data" });
         } else {
-            res.send("Values Edited");
+            const query1 = "INSERT INTO `employee` (`username`, `emp_name`, `password`, `emp_database`, `emp_datapass`, `company_name`, `role`, `eimg`, `emp_date`) VALUES (?, ?, ?, ?, NULL, ?);";
+            companydb.query(query1, [username, emp_name, password, results[0].emp_database, results[0].emp_datapass, results[0].company_name, role, emp_date], (err, results) => {
+                if (err) {
+                    console.error("Error fetching data:", err.message);
+                    res.status(500).json({ error: "Failed to fetch data" });
+                } else {
+                    res.send("Values Edited");
+                }
+            });
         }
     });
 });
@@ -1566,7 +1653,7 @@ app.post("/editemployee", (req, res) => {
     const role = req.body.role;
     const username = req.body.username;
     const query = "UPDATE `employee` SET `username` = ?, `emp_name` = ?, `password` = ?, `role` = ? WHERE `employee`.`emp_id` = ?;";
-    db.query(query, [username, emp_name, password, role, emp_id], (err, results) => {
+    companydb.query(query, [username, emp_name, password, role, emp_id], (err, results) => {
         if (err) {
             console.error("Error fetching data:", err.message);
             res.status(500).json({ error: "Failed to fetch data" });
@@ -1579,7 +1666,7 @@ app.post("/editemployee", (req, res) => {
 app.post('/deleteemployee', (req, res) => {
     const emp_id = req.body.emp_id;
     const query1 = "DELETE FROM `employee` WHERE `employee`.`emp_id` = ? AND `employee`.`role` != 'owner'";
-    db.query(query1, [emp_id], (err, results) => {
+    companydb.query(query1, [emp_id], (err, results) => {
         if (err) {
             console.error("Error fetching data:", err.message);
             res.status(500).json({ error: "Failed to fetch data" });
@@ -1590,12 +1677,21 @@ app.post('/deleteemployee', (req, res) => {
 });
 
 app.post("/editcompany_info", (req, res) => {
-    const filePath = "JSON/company_info.json";
-    const newData = req.body.formData;
-    fs.writeFile(filePath, JSON.stringify(newData, null, 2), (err) => {
+    const emp_id = req.body.emp_id;
+    const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
+    companydb.query(query, [emp_id], (err, results) => {
         if (err) {
-            console.error("Error writing to JSON file:", err);
-            res.status(500).json({ error: "Failed to save company information" });
+            console.error("Error fetching data:", err.message);
+            res.status(500).json({ error: "Failed to fetch data" });
+        } else {
+            const filePath = `${results[0].company_name}/company_info.json`;
+            const newData = req.body.formData;
+            fs.writeFile(filePath, JSON.stringify(newData, null, 2), (err) => {
+                if (err) {
+                    console.error("Error writing to JSON file:", err);
+                    res.status(500).json({ error: "Failed to save company information" });
+                }
+            });
         }
     });
 });
