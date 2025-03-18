@@ -4,10 +4,8 @@ const cors = require('cors');
 const path = require("path");
 const fs = require("fs");
 const app = express();
-app.use(cors({
-  origin: 'https://wandeethaiexpress.com',
-  methods: ['GET', 'POST'],
-}));
+
+app.options('*', cors());
 app.use(express.json());
 
 const db = mysql.createConnection({
