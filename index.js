@@ -5,7 +5,14 @@ const path = require("path");
 const fs = require("fs");
 const app = express();
 
-app.use(cors());
+const corsConf = {
+  origin: "*",
+  methods: "GET,HEAD,PUT,PATCH,POST,DELETE",
+  preflightContinue: false,
+  optionsSuccessStatus: 204
+}
+
+app.use(cors(corsConf));
 app.use(express.json());
 
 const db = mysql.createConnection({
