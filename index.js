@@ -4,6 +4,10 @@ const cors = require('cors');
 const path = require("path");
 const fs = require("fs");
 const app = express();
+const corsOptions = {
+  origin: 'https://wandeethaiexpress.com',
+  credentials: true,
+};
 app.use(cors());
 app.use(express.json());
 
