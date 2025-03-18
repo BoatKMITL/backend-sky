@@ -5,7 +5,7 @@ const path = require("path");
 const fs = require("fs");
 const app = express();
 
-app.options('*', cors());
+app.use(cors());
 app.use(express.json());
 
 const db = mysql.createConnection({
