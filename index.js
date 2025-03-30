@@ -4,7 +4,6 @@ const cors = require('cors');
 const path = require("path");
 const fs = require("fs");
 const app = express();
-
 app.use(cors());
 app.use(express.json());
 
@@ -204,7 +203,34 @@ app.post('/deleteCustomer', (req, res) => {
 });
 // Customer-------------------------------------------------------------------------------------------------------------------
 app.get('/customersDetails', (req, res) => {
-    const { id } = req.query;
+    const { id, emp_id } = req.query;
+    if (emp_id) {
+        const querydb = "SELECT * FROM `employee` WHERE `emp_id` = ?";
+        companydb.query(querydb, [emp_id], (err, results) => {
+            if (err) {
+                console.error("Error fetching data:", err.message);
+                res.status(500).json({ error: "Failed to fetch data" });
+            } else {
+                const newDatabase = results[0].emp_database; // Example of dynamic DB
+                const newUser = results[0].emp_database; // Example of dynamic user
+                const newPassword = results[0].emp_datapass; // Example of dynamic password
+                db.changeUser(
+                    {
+                        user: newUser,
+                        password: newPassword,
+                        database: newDatabase,
+                    },
+                    (changeErr) => {
+                        if (changeErr) {
+                            console.error("Error changing database:", changeErr.message);
+                            return res.status(500).json({ error: "Failed to switch database" });
+                        }
+                        res.json(results);
+                    }
+                );
+            }
+        });
+    }
     const query = "SELECT * FROM customers WHERE customer_id = ?;";
     db.query(query, [id], (err, customerResults) => {
         if (err) {
@@ -228,7 +254,34 @@ app.get('/addressesinfo', (req, res) => {
 });
 
 app.get('/customersaddresses', (req, res) => {
-    const { id } = req.query;
+    const { id, emp_id } = req.query;
+    if (emp_id) {
+        const querydb = "SELECT * FROM `employee` WHERE `emp_id` = ?";
+        companydb.query(querydb, [emp_id], (err, results) => {
+            if (err) {
+                console.error("Error fetching data:", err.message);
+                res.status(500).json({ error: "Failed to fetch data" });
+            } else {
+                const newDatabase = results[0].emp_database; // Example of dynamic DB
+                const newUser = results[0].emp_database; // Example of dynamic user
+                const newPassword = results[0].emp_datapass; // Example of dynamic password
+                db.changeUser(
+                    {
+                        user: newUser,
+                        password: newPassword,
+                        database: newDatabase,
+                    },
+                    (changeErr) => {
+                        if (changeErr) {
+                            console.error("Error changing database:", changeErr.message);
+                            return res.status(500).json({ error: "Failed to switch database" });
+                        }
+                        res.json(results);
+                    }
+                );
+            }
+        });
+    }
     const query2 = "SELECT * FROM addresses WHERE customer_id = ?;";
     db.query(query2, [id], (err, addressesResults) => {
         if (err) {
@@ -241,7 +294,34 @@ app.get('/customersaddresses', (req, res) => {
 });
 
 app.get('/customerspackages', (req, res) => {
-    const { id } = req.query;
+    const { id, emp_id } = req.query;
+    if (emp_id) {
+        const querydb = "SELECT * FROM `employee` WHERE `emp_id` = ?";
+        companydb.query(querydb, [emp_id], (err, results) => {
+            if (err) {
+                console.error("Error fetching data:", err.message);
+                res.status(500).json({ error: "Failed to fetch data" });
+            } else {
+                const newDatabase = results[0].emp_database; // Example of dynamic DB
+                const newUser = results[0].emp_database; // Example of dynamic user
+                const newPassword = results[0].emp_datapass; // Example of dynamic password
+                db.changeUser(
+                    {
+                        user: newUser,
+                        password: newPassword,
+                        database: newDatabase,
+                    },
+                    (changeErr) => {
+                        if (changeErr) {
+                            console.error("Error changing database:", changeErr.message);
+                            return res.status(500).json({ error: "Failed to switch database" });
+                        }
+                        res.json(results);
+                    }
+                );
+            }
+        });
+    }
     const processedId = id === undefined ? null : id;
     const query3 = `
         SELECT 
@@ -283,7 +363,34 @@ app.get('/nullpackages', (req, res) => {
 });
 
 app.get('/item', (req, res) => {
-    const { id } = req.query;
+    const { id, emp_id } = req.query;
+    if (emp_id) {
+        const querydb = "SELECT * FROM `employee` WHERE `emp_id` = ?";
+        companydb.query(querydb, [emp_id], (err, results) => {
+            if (err) {
+                console.error("Error fetching data:", err.message);
+                res.status(500).json({ error: "Failed to fetch data" });
+            } else {
+                const newDatabase = results[0].emp_database; // Example of dynamic DB
+                const newUser = results[0].emp_database; // Example of dynamic user
+                const newPassword = results[0].emp_datapass; // Example of dynamic password
+                db.changeUser(
+                    {
+                        user: newUser,
+                        password: newPassword,
+                        database: newDatabase,
+                    },
+                    (changeErr) => {
+                        if (changeErr) {
+                            console.error("Error changing database:", changeErr.message);
+                            return res.status(500).json({ error: "Failed to switch database" });
+                        }
+                        res.json(results);
+                    }
+                );
+            }
+        });
+    }
     const query = "SELECT * FROM items WHERE tracking_number = ? AND item_status = 0;";
     db.query(query, [id], (err, results) => {
         if (err) {
