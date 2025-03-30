@@ -1464,7 +1464,6 @@ app.get('/gentrack', (req, res) => {
 // User-------------------------------------------------------------------------------------------------------------------
 app.post('/editsendaddr', (req, res) => {
     const customer_id = req.body.customer_id;
-    const emp_id = req.body.emp_id;
     const customer_name = req.body.customer_name;
     const address = req.body.address;
     const city = req.body.city;
@@ -1474,7 +1473,8 @@ app.post('/editsendaddr', (req, res) => {
     const phone = req.body.phone;
     const doc_type = req.body.doc_type;
     const doc_url = req.body.doc_url;
-    if (emp_id) {
+    if (req.body.emp_id !== undefined) {
+        const emp_id = req.body.emp_id;
         const querydb = "SELECT * FROM `employee` WHERE `emp_id` = ?";
         companydb.query(querydb, [emp_id], (err, results) => {
             if (err) {
