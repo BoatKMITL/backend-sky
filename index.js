@@ -1464,6 +1464,7 @@ app.get('/gentrack', (req, res) => {
 // User-------------------------------------------------------------------------------------------------------------------
 app.post('/editsendaddr', (req, res) => {
     const customer_id = req.body.customer_id;
+    const emp_id = req.body.emp_id;
     const customer_name = req.body.customer_name;
     const address = req.body.address;
     const city = req.body.city;
@@ -1473,6 +1474,33 @@ app.post('/editsendaddr', (req, res) => {
     const phone = req.body.phone;
     const doc_type = req.body.doc_type;
     const doc_url = req.body.doc_url;
+    if (emp_id) {
+        const querydb = "SELECT * FROM `employee` WHERE `emp_id` = ?";
+        companydb.query(querydb, [emp_id], (err, results) => {
+            if (err) {
+                console.error("Error fetching data:", err.message);
+                res.status(500).json({ error: "Failed to fetch data" });
+            } else {
+                const newDatabase = results[0].emp_database; // Example of dynamic DB
+                const newUser = results[0].emp_database; // Example of dynamic user
+                const newPassword = results[0].emp_datapass; // Example of dynamic password
+                db.changeUser(
+                    {
+                        user: newUser,
+                        password: newPassword,
+                        database: newDatabase,
+                    },
+                    (changeErr) => {
+                        if (changeErr) {
+                            console.error("Error changing database:", changeErr.message);
+                            return res.status(500).json({ error: "Failed to switch database" });
+                        }
+                        res.json(results);
+                    }
+                );
+            }
+        });
+    }
     if (req.body.doc_url !== undefined) {
         const query1 = "UPDATE `customers` SET `customer_name` = ?, `address` = ?, `city` = ?, `state` = ?, `country` = ?, `zipcode` = ?, `phone` = ?, `doc_type` = ?, `doc_url` = ? WHERE `customers`.`customer_id` = ?;";
         db.query(query1, [customer_name, address, city, state, country, zipcode, phone, doc_type, doc_url, customer_id], (err, results) => {
