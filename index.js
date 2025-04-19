@@ -1558,7 +1558,7 @@ app.get("/dropdown", (req, res) => {
             const filePath = `${results[0].company_name}/dropdown.json`;
             const dirPath = path.dirname(filePath);
             if (!fs.existsSync(dirPath)) {
-                fs.mkdirSync(dirPath, { recursive: true });
+                res.send();
             }
             fs.readFile(filePath, "utf-8", (err, data) => {
                 if (err) {
