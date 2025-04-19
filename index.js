@@ -1535,6 +1535,15 @@ app.get("/company_info", (req, res) => {
             res.status(500).json({ error: "Failed to fetch data" });
         } else {
             const filePath = `${results[0].company_name}/company_info.json`;
+            if (!fs.existsSync(filePath)) {
+                fs.writeFile(filePath, '{}', (err) => {
+                    if (err) {
+                        console.error("Error writing file:", err);
+                    } else {
+                        console.log("Empty data file created successfully!");
+                    }
+                });
+            }
             fs.readFile(filePath, "utf-8", (err, data) => {
                 if (err) {
                     console.error("Error reading JSON file:", err);
@@ -1564,6 +1573,8 @@ app.get("/dropdown", (req, res) => {
             const dirPath = path.dirname(filePath);
             if (!fs.existsSync(dirPath)) {
                 fs.mkdirSync(dirPath, { recursive: true });
+            }
+            if (!fs.existsSync(filePath)) {
                 fs.writeFile(filePath, JSON.stringify(processedData, null, 2), (err) => {
                     if (err) {
                         console.error("Error writing file:", err);
@@ -1630,14 +1641,15 @@ app.get("/price", (req, res) => {
             if (!fs.existsSync(dirPath)) {
                 fs.mkdirSync(dirPath, { recursive: true });
             }
-            console.log("11111111");
-            fs.writeFile(filePath, '{}', (err) => {
+            if (!fs.existsSync(filePath)) {
+                fs.writeFile(filePath, '{}', (err) => {
                     if (err) {
                         console.error("Error writing file:", err);
                     } else {
                         console.log("Empty data file created successfully!");
                     }
                 });
+            }
             fs.readFile(filePath, "utf-8", (err, data) => {
                 if (err) {
                     console.error("Error reading JSON file:", err);
@@ -1686,6 +1698,8 @@ app.get("/promotion", (req, res) => {
             const dirPath = path.dirname(filePath);
             if (!fs.existsSync(dirPath)) {
                 fs.mkdirSync(dirPath, { recursive: true });
+            }
+            if (!fs.existsSync(filePath)) {
                 fs.writeFile(filePath, '{}', (err) => {
                     if (err) {
                         console.error("Error writing file:", err);
