@@ -1620,7 +1620,6 @@ app.post("/editdropdown", (req, res) => {
 app.get("/price", (req, res) => {
     const { emp_id } = req.query;
     const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-    const processedData = [{}]
     companydb.query(query, [emp_id], (err, results) => {
         if (err) {
             console.error("Error fetching data:", err.message);
@@ -1630,7 +1629,7 @@ app.get("/price", (req, res) => {
             const dirPath = path.dirname(filePath);
             if (!fs.existsSync(dirPath)) {
                 fs.mkdirSync(dirPath, { recursive: true });
-                fs.writeFile(filePath, JSON.stringify(processedData, null, 2), (err) => {
+                fs.writeFile(filePath, '{}', (err) => {
                     if (err) {
                         console.error("Error writing file:", err);
                     } else {
@@ -1677,7 +1676,6 @@ app.post("/editprice", (req, res) => {
 app.get("/promotion", (req, res) => {
     const { emp_id } = req.query;
     const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-    const processedData = [{}]
     companydb.query(query, [emp_id], (err, results) => {
         if (err) {
             console.error("Error fetching data:", err.message);
@@ -1687,7 +1685,7 @@ app.get("/promotion", (req, res) => {
             const dirPath = path.dirname(filePath);
             if (!fs.existsSync(dirPath)) {
                 fs.mkdirSync(dirPath, { recursive: true });
-                fs.writeFile(filePath, JSON.stringify(processedData, null, 2), (err) => {
+                fs.writeFile(filePath, '{}', (err) => {
                     if (err) {
                         console.error("Error writing file:", err);
                     } else {
