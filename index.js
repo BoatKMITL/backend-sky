@@ -1549,6 +1549,11 @@ app.get("/company_info", (req, res) => {
 
 app.get("/dropdown", (req, res) => {
     const { emp_id } = req.query;
+    const processedData = {
+      channels: [],
+      categories: [],
+      levels: []
+    };
     const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
     companydb.query(query, [emp_id], (err, results) => {
         if (err) {
@@ -1558,7 +1563,14 @@ app.get("/dropdown", (req, res) => {
             const filePath = `${results[0].company_name}/dropdown.json`;
             const dirPath = path.dirname(filePath);
             if (!fs.existsSync(dirPath)) {
-                res.send();
+                fs.mkdirSync(dirPath, { recursive: true });
+                fs.writeFile(filePath, JSON.stringify(processedData, null, 2), (err) => {
+                    if (err) {
+                        console.error("Error writing file:", err);
+                    } else {
+                        console.log("Empty data file created successfully!");
+                    }
+                });
             }
             fs.readFile(filePath, "utf-8", (err, data) => {
                 if (err) {
@@ -1608,6 +1620,7 @@ app.post("/editdropdown", (req, res) => {
 app.get("/price", (req, res) => {
     const { emp_id } = req.query;
     const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
+    const processedData = []
     companydb.query(query, [emp_id], (err, results) => {
         if (err) {
             console.error("Error fetching data:", err.message);
@@ -1616,7 +1629,14 @@ app.get("/price", (req, res) => {
             const filePath = `${results[0].company_name}/price.json`;
             const dirPath = path.dirname(filePath);
             if (!fs.existsSync(dirPath)) {
-                res.send();
+                fs.mkdirSync(dirPath, { recursive: true });
+                fs.writeFile(filePath, JSON.stringify(processedData, null, 2), (err) => {
+                    if (err) {
+                        console.error("Error writing file:", err);
+                    } else {
+                        console.log("Empty data file created successfully!");
+                    }
+                });
             }
             fs.readFile(filePath, "utf-8", (err, data) => {
                 if (err) {
@@ -1657,6 +1677,7 @@ app.post("/editprice", (req, res) => {
 app.get("/promotion", (req, res) => {
     const { emp_id } = req.query;
     const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
+    const processedData = []
     companydb.query(query, [emp_id], (err, results) => {
         if (err) {
             console.error("Error fetching data:", err.message);
@@ -1665,7 +1686,14 @@ app.get("/promotion", (req, res) => {
             const filePath = `${results[0].company_name}/promotion.json`;
             const dirPath = path.dirname(filePath);
             if (!fs.existsSync(dirPath)) {
-                res.send();
+                fs.mkdirSync(dirPath, { recursive: true });
+                fs.writeFile(filePath, JSON.stringify(processedData, null, 2), (err) => {
+                    if (err) {
+                        console.error("Error writing file:", err);
+                    } else {
+                        console.log("Empty data file created successfully!");
+                    }
+                });
             }
             fs.readFile(filePath, "utf-8", (err, data) => {
                 if (err) {
