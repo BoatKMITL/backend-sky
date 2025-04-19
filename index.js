@@ -1556,6 +1556,10 @@ app.get("/dropdown", (req, res) => {
             res.status(500).json({ error: "Failed to fetch data" });
         } else {
             const filePath = `${results[0].company_name}/dropdown.json`;
+            const dirPath = path.dirname(filePath);
+            if (!fs.existsSync(dirPath)) {
+                fs.mkdirSync(dirPath, { recursive: true });
+            }
             fs.readFile(filePath, "utf-8", (err, data) => {
                 if (err) {
                     console.error("Error reading JSON file:", err);
