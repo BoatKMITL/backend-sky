@@ -1754,6 +1754,19 @@ app.get("/warehouse", (req, res) => {
             res.status(500).json({ error: "Failed to fetch data" });
         } else {
             const filePath = `${results[0].company_name}/warehouse.json`;
+            const dirPath = path.dirname(filePath);
+            if (!fs.existsSync(dirPath)) {
+                fs.mkdirSync(dirPath, { recursive: true });
+            }
+            if (!fs.existsSync(filePath)) {
+                fs.writeFile(filePath, '{}', (err) => {
+                    if (err) {
+                        console.error("Error writing file:", err);
+                    } else {
+                        console.log("Empty data file created successfully!");
+                    }
+                });
+            }
             fs.readFile(filePath, "utf-8", (err, data) => {
                 if (err) {
                     console.error("Error reading JSON file:", err);
