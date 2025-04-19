@@ -1620,7 +1620,7 @@ app.post("/editdropdown", (req, res) => {
 app.get("/price", (req, res) => {
     const { emp_id } = req.query;
     const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-    const processedData = []
+    const processedData = [{}]
     companydb.query(query, [emp_id], (err, results) => {
         if (err) {
             console.error("Error fetching data:", err.message);
@@ -1677,7 +1677,7 @@ app.post("/editprice", (req, res) => {
 app.get("/promotion", (req, res) => {
     const { emp_id } = req.query;
     const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-    const processedData = []
+    const processedData = [{}]
     companydb.query(query, [emp_id], (err, results) => {
         if (err) {
             console.error("Error fetching data:", err.message);
