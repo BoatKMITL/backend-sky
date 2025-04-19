@@ -4,6 +4,7 @@ const cors = require('cors');
 const path = require("path");
 const fs = require("fs");
 const app = express();
+const CryptoJS = require("crypto-js");
 app.use(cors());
 app.use(express.json());
 
