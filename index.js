@@ -205,10 +205,9 @@ app.post('/deleteCustomer', (req, res) => {
 // Customer-------------------------------------------------------------------------------------------------------------------
 app.get('/customersDetails', (req, res) => {
     const { id, emp_id } = req.query;
-    console.log(1111, emp_id !== undefined)
     if (emp_id !== undefined) {
         const querydb = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-        console.log(2222)
+        console.log(CryptoJS.AES.decrypt(emp_id, "sky45678you").toString(CryptoJS.enc.Utf8))
         companydb.query(querydb, [CryptoJS.AES.decrypt(emp_id, "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
             if (err) {
                 console.error("Error fetching data:", err.message);
