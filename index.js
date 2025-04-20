@@ -237,6 +237,14 @@ app.get('/customersDetails', (req, res) => {
                 );
             }
         });
+    } else {
+        const query = "SELECT * FROM customers WHERE customer_id = ?;";
+        db.query(query, [id], (err, customerResults) => {
+            if (err) {
+                console.error("Error fetching data:", err.message);
+                res.status(500).json({ error: "Failed to fetch data" });
+            } res.json(customerResults);
+        });
     }
 });
 
@@ -287,6 +295,16 @@ app.get('/customersaddresses', (req, res) => {
                         });
                     }
                 );
+            }
+        });
+    } else {
+        const query2 = "SELECT * FROM addresses WHERE customer_id = ?;";
+        db.query(query2, [id], (err, addressesResults) => {
+            if (err) {
+                console.error("Error in second query:", err.message);
+                return res.status(500).json({ error: "Failed to fetch data from second query" });
+            } else {
+                res.json(addressesResults);
             }
         });
     }
@@ -343,6 +361,33 @@ app.get('/customerspackages', (req, res) => {
                         });
                     }
                 );
+            }
+        });
+    } else {
+        const processedId = id === undefined ? null : id;
+        const query3 = `
+            SELECT 
+                p.*,
+                COALESCE(SUM(CASE WHEN i.item_status = 0 THEN 1 ELSE 0 END), 0) AS sum0,
+                COALESCE(SUM(CASE WHEN i.item_status = 1 THEN 1 ELSE 0 END), 0) AS sum1
+            FROM 
+                packages p
+            LEFT JOIN 
+                items i 
+            ON 
+                p.tracking_number = i.tracking_number
+            WHERE 
+                ${processedId === null ? "p.customer_id IS NULL" : "p.customer_id = ?"}
+            GROUP BY 
+                p.tracking_number;
+        `;
+        const params = processedId === null ? [] : [processedId];
+        db.query(query3, params, (err, packagesResults) => {
+            if (err) {
+                console.error("Error in third query:", err.message);
+                return res.status(500).json({ error: "Failed to fetch data from third query" });
+            } else {
+                res.json(packagesResults)
             }
         });
     }
