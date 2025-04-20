@@ -101,7 +101,7 @@ app.post('/logout', (req, res) => {
 });
 // Home-------------------------------------------------------------------------------------------------------------------
 app.get('/allcustomers', (req, res) => {
-    const query = "SELECT * FROM customers ORDER BY c.customer_date DESC;";
+    const query = "SELECT * FROM customers ORDER BY customer_date DESC;";
     db.query(query, (err, results) => {
         if (err) {
             console.error("Error fetching data:", err.message);
