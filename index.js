@@ -212,6 +212,7 @@ app.get('/customersDetails', (req, res) => {
             if (err) {
                 console.error("Error fetching data:", err.message);
                 res.status(500).json({ error: "Failed to fetch data" });
+                console.log(23232323)
             } else {
                 const newDatabase = results[0].emp_database; // Example of dynamic DB
                 const newUser = results[0].emp_database; // Example of dynamic user
@@ -234,7 +235,6 @@ app.get('/customersDetails', (req, res) => {
             }
         });
     }
-    console.log(db)
     const query = "SELECT * FROM customers WHERE customer_id = ?;";
     db.query(query, [id], (err, customerResults) => {
         if (err) {
