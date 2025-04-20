@@ -26,7 +26,7 @@ const companydb = mysql.createConnection({
 // Login-------------------------------------------------------------------------------------------------------------------
 app.post('/login', (req, res) => {
     if (req.body.emp_id !== undefined) {
-        const emp_id = CryptoJS.AES.decrypt(req.body.emp_id, "sky45678you").toString(CryptoJS.enc.Utf8);
+        const emp_id = CryptoJS.AES.decrypt(decodeURIComponent(req.body.emp_id), "sky45678you").toString(CryptoJS.enc.Utf8);
         const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
         companydb.query(query, [emp_id], (err, results) => {
             if (err) {
@@ -207,7 +207,7 @@ app.get('/customersDetails', (req, res) => {
     const { id, emp_id } = req.query;
     if (emp_id !== undefined) {
         const querydb = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-        companydb.query(querydb, [CryptoJS.AES.decrypt(emp_id, "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
+        companydb.query(querydb, [CryptoJS.AES.decrypt(decodeURIComponent(emp_id), "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
             if (err) {
                 console.error("Error fetching data:", err.message);
                 res.status(500).json({ error: "Failed to fetch data" });
@@ -265,7 +265,7 @@ app.get('/customersaddresses', (req, res) => {
     const { id, emp_id } = req.query;
     if (emp_id !== undefined) {
         const querydb = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-        companydb.query(querydb, [CryptoJS.AES.decrypt(emp_id, "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
+        companydb.query(querydb, [CryptoJS.AES.decrypt(decodeURIComponent(emp_id), "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
             if (err) {
                 console.error("Error fetching data:", err.message);
                 res.status(500).json({ error: "Failed to fetch data" });
@@ -314,7 +314,7 @@ app.get('/customerspackages', (req, res) => {
     const { id, emp_id } = req.query;
     if (emp_id !== undefined) {
         const querydb = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-        companydb.query(querydb, [CryptoJS.AES.decrypt(emp_id, "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
+        companydb.query(querydb, [CryptoJS.AES.decrypt(decodeURIComponent(emp_id), "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
             if (err) {
                 console.error("Error fetching data:", err.message);
                 res.status(500).json({ error: "Failed to fetch data" });
@@ -409,7 +409,7 @@ app.get('/item', (req, res) => {
     const { id, emp_id } = req.query;
     if (emp_id !== undefined) {
         const querydb = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-        companydb.query(querydb, [CryptoJS.AES.decrypt(emp_id, "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
+        companydb.query(querydb, [CryptoJS.AES.decrypt(decodeURIComponent(emp_id), "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
             if (err) {
                 console.error("Error fetching data:", err.message);
                 res.status(500).json({ error: "Failed to fetch data" });
@@ -1581,7 +1581,7 @@ app.post('/editsendaddr', (req, res) => {
 app.get("/company_info", (req, res) => {
     const { emp_id } = req.query;
     const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-    companydb.query(query, [CryptoJS.AES.decrypt(emp_id, "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
+    companydb.query(query, [CryptoJS.AES.decrypt(decodeURIComponent(emp_id), "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
         if (err) {
             console.error("Error fetching data:", err.message);
             res.status(500).json({ error: "Failed to fetch data" });
@@ -1616,7 +1616,7 @@ app.get("/dropdown", (req, res) => {
       levels: []
     };
     const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-    companydb.query(query, [CryptoJS.AES.decrypt(emp_id, "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
+    companydb.query(query, [CryptoJS.AES.decrypt(decodeURIComponent(emp_id), "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
         if (err) {
             console.error("Error fetching data:", err.message);
             res.status(500).json({ error: "Failed to fetch data" });
@@ -1657,7 +1657,7 @@ app.post("/editdropdown", (req, res) => {
         categories: uniqueCategories,
         levels: uniqueLevels
     };
-    const emp_id = CryptoJS.AES.decrypt(req.body.emp_id, "sky45678you").toString(CryptoJS.enc.Utf8);
+    const emp_id = CryptoJS.AES.decrypt(decodeURIComponent(req.body.emp_id), "sky45678you").toString(CryptoJS.enc.Utf8);
     const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
     companydb.query(query, [emp_id], (err, results) => {
         if (err) {
@@ -1683,7 +1683,7 @@ app.post("/editdropdown", (req, res) => {
 app.get("/price", (req, res) => {
     const { emp_id } = req.query;
     const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-    companydb.query(query, [CryptoJS.AES.decrypt(emp_id, "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
+    companydb.query(query, [CryptoJS.AES.decrypt(decodeURIComponent(emp_id), "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
         if (err) {
             console.error("Error fetching data:", err.message);
             res.status(500).json({ error: "Failed to fetch data" });
@@ -1715,7 +1715,7 @@ app.get("/price", (req, res) => {
 });
 
 app.post("/editprice", (req, res) => {
-    const emp_id = CryptoJS.AES.decrypt(req.body.emp_id, "sky45678you").toString(CryptoJS.enc.Utf8);
+    const emp_id = CryptoJS.AES.decrypt(decodeURIComponent(req.body.emp_id), "sky45678you").toString(CryptoJS.enc.Utf8);
     const newData = req.body.updatedPricing;
     const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
     companydb.query(query, [emp_id], (err, results) => {
@@ -1741,7 +1741,7 @@ app.post("/editprice", (req, res) => {
 app.get("/promotion", (req, res) => {
     const { emp_id } = req.query;
     const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-    companydb.query(query, [CryptoJS.AES.decrypt(emp_id, "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
+    companydb.query(query, [CryptoJS.AES.decrypt(decodeURIComponent(emp_id), "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
         if (err) {
             console.error("Error fetching data:", err.message);
             res.status(500).json({ error: "Failed to fetch data" });
@@ -1773,7 +1773,7 @@ app.get("/promotion", (req, res) => {
 });
 
 app.post("/editpromotion", (req, res) => {
-    const emp_id = CryptoJS.AES.decrypt(req.body.emp_id, "sky45678you").toString(CryptoJS.enc.Utf8);
+    const emp_id = CryptoJS.AES.decrypt(decodeURIComponent(req.body.emp_id), "sky45678you").toString(CryptoJS.enc.Utf8);
     const newData = req.body.updatedPromotions;
     const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
     companydb.query(query, [emp_id], (err, results) => {
@@ -1805,7 +1805,7 @@ app.get("/warehouse", (req, res) => {
       productCategories: [],
       boxSizes: []
     };
-    companydb.query(query, [CryptoJS.AES.decrypt(emp_id, "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
+    companydb.query(query, [CryptoJS.AES.decrypt(decodeURIComponent(emp_id), "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
         if (err) {
             console.error("Error fetching data:", err.message);
             res.status(500).json({ error: "Failed to fetch data" });
@@ -1837,7 +1837,7 @@ app.get("/warehouse", (req, res) => {
 });
 
 app.post("/editwarehoussetting", (req, res) => {
-    const emp_id = CryptoJS.AES.decrypt(req.body.emp_id, "sky45678you").toString(CryptoJS.enc.Utf8);
+    const emp_id = CryptoJS.AES.decrypt(decodeURIComponent(req.body.emp_id), "sky45678you").toString(CryptoJS.enc.Utf8);
     const newData = req.body;
     const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
     companydb.query(query, [emp_id], (err, results) => {
@@ -1864,7 +1864,7 @@ app.post("/editwarehoussetting", (req, res) => {
 app.get("/employee", (req, res) => {
     const { emp_id } = req.query;
     const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-    companydb.query(query, [CryptoJS.AES.decrypt(emp_id, "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
+    companydb.query(query, [CryptoJS.AES.decrypt(decodeURIComponent(emp_id), "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
         if (err) {
             console.error("Error fetching data:", err.message);
             res.status(500).json({ error: "Failed to fetch data" });
@@ -1885,7 +1885,7 @@ app.get("/employee", (req, res) => {
 app.get("/employeeinfo", (req, res) => {
     const { id } = req.query;
     const query = "SELECT * FROM `employee` WHERE `employee`.`emp_id` = ?;";
-    companydb.query(query, [CryptoJS.AES.decrypt(id, "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
+    companydb.query(query, [CryptoJS.AES.decrypt(decodeURIComponent(id), "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
         if (err) {
             console.error("Error fetching data:", err.message);
             res.status(500).json({ error: "Failed to fetch data" });
@@ -1901,7 +1901,7 @@ app.post('/addemployee', (req, res) => {
     const role = req.body.role;
     const password = req.body.password;
     const emp_date = req.body.emp_date;
-    const emp_id = CryptoJS.AES.decrypt(req.body.emp_id, "sky45678you").toString(CryptoJS.enc.Utf8);
+    const emp_id = CryptoJS.AES.decrypt(decodeURIComponent(req.body.emp_id), "sky45678you").toString(CryptoJS.enc.Utf8);
     const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
     companydb.query(query, [emp_id], (err, results) => {
         if (err) {
@@ -1952,7 +1952,7 @@ app.post('/deleteemployee', (req, res) => {
 });
 
 app.post("/editcompany_info", (req, res) => {
-    const emp_id = CryptoJS.AES.decrypt(req.body.emp_id, "sky45678you").toString(CryptoJS.enc.Utf8);
+    const emp_id = CryptoJS.AES.decrypt(decodeURIComponent(req.body.emp_id), "sky45678you").toString(CryptoJS.enc.Utf8);
     const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
     companydb.query(query, [emp_id], (err, results) => {
         if (err) {
