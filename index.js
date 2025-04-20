@@ -207,17 +207,14 @@ app.get('/customersDetails', (req, res) => {
     const { id, emp_id } = req.query;
     if (emp_id !== undefined) {
         const querydb = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-        console.log(CryptoJS.AES.decrypt(emp_id, "sky45678you").toString(CryptoJS.enc.Utf8))
         companydb.query(querydb, [CryptoJS.AES.decrypt(emp_id, "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
             if (err) {
                 console.error("Error fetching data:", err.message);
                 res.status(500).json({ error: "Failed to fetch data" });
-                console.log(23232323)
             } else {
                 const newDatabase = results[0].emp_database; // Example of dynamic DB
                 const newUser = results[0].emp_database; // Example of dynamic user
                 const newPassword = results[0].emp_datapass; // Example of dynamic password
-                console.log(newDatabase, newUser, newPassword)
                 db.changeUser(
                     {
                         user: newUser,
@@ -229,19 +226,18 @@ app.get('/customersDetails', (req, res) => {
                             console.error("Error changing database:", changeErr.message);
                             return res.status(500).json({ error: "Failed to switch database" });
                         }
-                        res.json(results);
+                        const query = "SELECT * FROM customers WHERE customer_id = ?;";
+                        db.query(query, [id], (err, customerResults) => {
+                            if (err) {
+                                console.error("Error fetching data:", err.message);
+                                res.status(500).json({ error: "Failed to fetch data" });
+                            } res.json(customerResults);
+                        });
                     }
                 );
             }
         });
     }
-    const query = "SELECT * FROM customers WHERE customer_id = ?;";
-    db.query(query, [id], (err, customerResults) => {
-        if (err) {
-            console.error("Error fetching data:", err.message);
-            res.status(500).json({ error: "Failed to fetch data" });
-        } res.json(customerResults);
-    });
 });
 
 app.get('/addressesinfo', (req, res) => {
@@ -280,21 +276,20 @@ app.get('/customersaddresses', (req, res) => {
                             console.error("Error changing database:", changeErr.message);
                             return res.status(500).json({ error: "Failed to switch database" });
                         }
-                        res.json(results);
+                        const query2 = "SELECT * FROM addresses WHERE customer_id = ?;";
+                        db.query(query2, [id], (err, addressesResults) => {
+                            if (err) {
+                                console.error("Error in second query:", err.message);
+                                return res.status(500).json({ error: "Failed to fetch data from second query" });
+                            } else {
+                                res.json(addressesResults);
+                            }
+                        });
                     }
                 );
             }
         });
     }
-    const query2 = "SELECT * FROM addresses WHERE customer_id = ?;";
-    db.query(query2, [id], (err, addressesResults) => {
-        if (err) {
-            console.error("Error in second query:", err.message);
-            return res.status(500).json({ error: "Failed to fetch data from second query" });
-        } else {
-            res.json(addressesResults);
-        }
-    });
 });
 
 app.get('/customerspackages', (req, res) => {
@@ -320,38 +315,37 @@ app.get('/customerspackages', (req, res) => {
                             console.error("Error changing database:", changeErr.message);
                             return res.status(500).json({ error: "Failed to switch database" });
                         }
-                        res.json(results);
+                        const processedId = id === undefined ? null : id;
+                        const query3 = `
+                            SELECT 
+                                p.*,
+                                COALESCE(SUM(CASE WHEN i.item_status = 0 THEN 1 ELSE 0 END), 0) AS sum0,
+                                COALESCE(SUM(CASE WHEN i.item_status = 1 THEN 1 ELSE 0 END), 0) AS sum1
+                            FROM 
+                                packages p
+                            LEFT JOIN 
+                                items i 
+                            ON 
+                                p.tracking_number = i.tracking_number
+                            WHERE 
+                                ${processedId === null ? "p.customer_id IS NULL" : "p.customer_id = ?"}
+                            GROUP BY 
+                                p.tracking_number;
+                        `;
+                        const params = processedId === null ? [] : [processedId];
+                        db.query(query3, params, (err, packagesResults) => {
+                            if (err) {
+                                console.error("Error in third query:", err.message);
+                                return res.status(500).json({ error: "Failed to fetch data from third query" });
+                            } else {
+                                res.json(packagesResults)
+                            }
+                        });
                     }
                 );
             }
         });
     }
-    const processedId = id === undefined ? null : id;
-    const query3 = `
-        SELECT 
-            p.*,
-            COALESCE(SUM(CASE WHEN i.item_status = 0 THEN 1 ELSE 0 END), 0) AS sum0,
-            COALESCE(SUM(CASE WHEN i.item_status = 1 THEN 1 ELSE 0 END), 0) AS sum1
-        FROM 
-            packages p
-        LEFT JOIN 
-            items i 
-        ON 
-            p.tracking_number = i.tracking_number
-        WHERE 
-            ${processedId === null ? "p.customer_id IS NULL" : "p.customer_id = ?"}
-        GROUP BY 
-            p.tracking_number;
-    `;
-    const params = processedId === null ? [] : [processedId];
-    db.query(query3, params, (err, packagesResults) => {
-        if (err) {
-            console.error("Error in third query:", err.message);
-            return res.status(500).json({ error: "Failed to fetch data from third query" });
-        } else {
-            res.json(packagesResults)
-        }
-    });
 });
 
 app.get('/nullpackages', (req, res) => {
@@ -389,21 +383,20 @@ app.get('/item', (req, res) => {
                             console.error("Error changing database:", changeErr.message);
                             return res.status(500).json({ error: "Failed to switch database" });
                         }
-                        res.json(results);
+                        const query = "SELECT * FROM items WHERE tracking_number = ? AND item_status = 0;";
+                        db.query(query, [id], (err, results) => {
+                            if (err) {
+                                console.error("Error fetching data:", err.message);
+                                res.status(500).json({ error: "Failed to fetch data" });
+                            } else {
+                                res.json(results);
+                            }
+                        });
                     }
                 );
             }
         });
     }
-    const query = "SELECT * FROM items WHERE tracking_number = ? AND item_status = 0;";
-    db.query(query, [id], (err, results) => {
-        if (err) {
-            console.error("Error fetching data:", err.message);
-            res.status(500).json({ error: "Failed to fetch data" });
-        } else {
-            res.json(results);
-        }
-    });
 });
 
 app.post('/additems', (req, res) => {
