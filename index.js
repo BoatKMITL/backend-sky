@@ -233,6 +233,7 @@ app.get('/customersDetails', (req, res) => {
             }
         });
     }
+    console.log(db)
     const query = "SELECT * FROM customers WHERE customer_id = ?;";
     db.query(query, [id], (err, customerResults) => {
         if (err) {
