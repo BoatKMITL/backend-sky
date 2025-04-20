@@ -216,6 +216,7 @@ app.get('/customersDetails', (req, res) => {
                 const newDatabase = results[0].emp_database; // Example of dynamic DB
                 const newUser = results[0].emp_database; // Example of dynamic user
                 const newPassword = results[0].emp_datapass; // Example of dynamic password
+                console.log(newDatabase, newUser, newPassword)
                 db.changeUser(
                     {
                         user: newUser,
