@@ -27,6 +27,8 @@ const companydb = mysql.createConnection({
 app.post('/login', (req, res) => {
     if (req.body.emp_id !== undefined) {
         const emp_id = req.body.emp_id;
+        const emp_idr = CryptoJS.AES.decrypt(emp_id, "sky45678you").toString(CryptoJS.enc.Utf8);
+        console.log(emp_idr)
         const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
         companydb.query(query, [emp_id], (err, results) => {
             if (err) {
