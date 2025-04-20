@@ -207,7 +207,7 @@ app.get('/customersDetails', (req, res) => {
     const { id, emp_id } = req.query;
     if (emp_id) {
         const querydb = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-        companydb.query(querydb, [emp_id], (err, results) => {
+        companydb.query(querydb, [CryptoJS.AES.decrypt(emp_id, "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
             if (err) {
                 console.error("Error fetching data:", err.message);
                 res.status(500).json({ error: "Failed to fetch data" });
@@ -258,7 +258,7 @@ app.get('/customersaddresses', (req, res) => {
     const { id, emp_id } = req.query;
     if (emp_id) {
         const querydb = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-        companydb.query(querydb, [emp_id], (err, results) => {
+        companydb.query(querydb, [CryptoJS.AES.decrypt(emp_id, "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
             if (err) {
                 console.error("Error fetching data:", err.message);
                 res.status(500).json({ error: "Failed to fetch data" });
@@ -298,7 +298,7 @@ app.get('/customerspackages', (req, res) => {
     const { id, emp_id } = req.query;
     if (emp_id) {
         const querydb = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-        companydb.query(querydb, [emp_id], (err, results) => {
+        companydb.query(querydb, [CryptoJS.AES.decrypt(emp_id, "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
             if (err) {
                 console.error("Error fetching data:", err.message);
                 res.status(500).json({ error: "Failed to fetch data" });
