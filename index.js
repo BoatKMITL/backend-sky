@@ -205,7 +205,7 @@ app.post('/deleteCustomer', (req, res) => {
 // Customer-------------------------------------------------------------------------------------------------------------------
 app.get('/customersDetails', (req, res) => {
     const { id, emp_id } = req.query;
-    if (emp_id) {
+    if (emp_id !== undefined) {
         const querydb = "SELECT * FROM `employee` WHERE `emp_id` = ?";
         companydb.query(querydb, [CryptoJS.AES.decrypt(emp_id, "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
             if (err) {
@@ -256,7 +256,7 @@ app.get('/addressesinfo', (req, res) => {
 
 app.get('/customersaddresses', (req, res) => {
     const { id, emp_id } = req.query;
-    if (emp_id) {
+    if (emp_id !== undefined) {
         const querydb = "SELECT * FROM `employee` WHERE `emp_id` = ?";
         companydb.query(querydb, [CryptoJS.AES.decrypt(emp_id, "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
             if (err) {
@@ -296,7 +296,7 @@ app.get('/customersaddresses', (req, res) => {
 
 app.get('/customerspackages', (req, res) => {
     const { id, emp_id } = req.query;
-    if (emp_id) {
+    if (emp_id !== undefined) {
         const querydb = "SELECT * FROM `employee` WHERE `emp_id` = ?";
         companydb.query(querydb, [CryptoJS.AES.decrypt(emp_id, "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
             if (err) {
@@ -365,7 +365,7 @@ app.get('/nullpackages', (req, res) => {
 
 app.get('/item', (req, res) => {
     const { id, emp_id } = req.query;
-    if (emp_id) {
+    if (emp_id !== undefined) {
         const querydb = "SELECT * FROM `employee` WHERE `emp_id` = ?";
         companydb.query(querydb, [CryptoJS.AES.decrypt(emp_id, "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
             if (err) {
