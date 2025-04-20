@@ -396,6 +396,16 @@ app.get('/item', (req, res) => {
                 );
             }
         });
+    } else {
+        const query = "SELECT * FROM items WHERE tracking_number = ? AND item_status = 0;";
+        db.query(query, [id], (err, results) => {
+            if (err) {
+                console.error("Error fetching data:", err.message);
+                res.status(500).json({ error: "Failed to fetch data" });
+            } else {
+                res.json(results);
+            }
+        }); 
     }
 });
 
