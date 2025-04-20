@@ -1588,7 +1588,7 @@ app.get("/company_info", (req, res) => {
         } else {
             const filePath = `${results[0].company_name}/company_info.json`;
             if (!fs.existsSync(filePath)) {
-                fs.writeFile(filePath, '{[]}', (err) => {
+                fs.writeFile(filePath, '{}', (err) => {
                     if (err) {
                         console.error("Error writing file:", err);
                     } else {
@@ -1694,7 +1694,7 @@ app.get("/price", (req, res) => {
                 fs.mkdirSync(dirPath, { recursive: true });
             }
             if (!fs.existsSync(filePath)) {
-                fs.writeFile(filePath, '{[]}', (err) => {
+                fs.writeFile(filePath, '[]', (err) => {
                     if (err) {
                         console.error("Error writing file:", err);
                     } else {
@@ -1752,7 +1752,7 @@ app.get("/promotion", (req, res) => {
                 fs.mkdirSync(dirPath, { recursive: true });
             }
             if (!fs.existsSync(filePath)) {
-                fs.writeFile(filePath, '{[]}', (err) => {
+                fs.writeFile(filePath, '{}', (err) => {
                     if (err) {
                         console.error("Error writing file:", err);
                     } else {
@@ -1800,6 +1800,11 @@ app.post("/editpromotion", (req, res) => {
 app.get("/warehouse", (req, res) => {
     const { emp_id } = req.query;
     const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
+    const processedData = {
+      shelves: [],
+      productCategories: [],
+      boxSizes: []
+    };
     companydb.query(query, [CryptoJS.AES.decrypt(emp_id, "sky45678you").toString(CryptoJS.enc.Utf8)], (err, results) => {
         if (err) {
             console.error("Error fetching data:", err.message);
