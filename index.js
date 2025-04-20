@@ -1816,7 +1816,7 @@ app.get("/warehouse", (req, res) => {
                 fs.mkdirSync(dirPath, { recursive: true });
             }
             if (!fs.existsSync(filePath)) {
-                fs.writeFile(filePath, '{[]}', (err) => {
+                fs.writeFile(filePath, JSON.stringify(processedData, null, 2), (err) => {
                     if (err) {
                         console.error("Error writing file:", err);
                     } else {
