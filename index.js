@@ -101,7 +101,7 @@ app.post('/logout', (req, res) => {
 });
 // Home-------------------------------------------------------------------------------------------------------------------
 app.get('/allcustomers', (req, res) => {
-    const query = "SELECT c.*, COUNT( CASE WHEN NOT EXISTS ( SELECT 1 FROM items AS i WHERE i.tracking_number = p.tracking_number GROUP BY i.tracking_number HAVING MIN(i.item_status) = 1 AND MAX(i.item_status) = 1 ) THEN p.tracking_number END ) AS package_count FROM customers AS c LEFT JOIN packages AS p ON c.customer_id = p.customer_id GROUP BY c.customer_id ORDER BY c.customer_date DESC;";
+    const query = "SELECT * FROM customers ORDER BY customer_date DESC;";
     db.query(query, (err, results) => {
         if (err) {
             console.error("Error fetching data:", err.message);
