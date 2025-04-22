@@ -24,79 +24,57 @@ const companydb = mysql.createConnection({
     database: "sharebil_sky4you",
 });
 // Login-------------------------------------------------------------------------------------------------------------------
-/* ------------------------- /login (เวอร์ชันปลอดภัย) ------------------------- */
+
 app.post("/login", (req, res) => {
-    /* รับค่าที่มากับ body */
-    const { emp_id, username, password } = req.body;
+    /* แยกสองรูปแบบการล็อกอิน */
+    const byEmpId = req.body.emp_id !== undefined && req.body.emp_id !== null;
   
-    /* 1) ตรวจสอบว่าผู้ใช้ส่งข้อมูลชนิดใดมา */
-    if (!emp_id && !(username && password)) {
-      return res
-        .status(400)
-        .json({ error: "กรุณาระบุ emp_id หรือ username / password" });
-    }
+    /* เลือก SQL และพารามิเตอร์ตามรูปแบบ */
+    const sql = byEmpId
+      ? "SELECT * FROM `employee` WHERE `emp_id` = ?"
+      : "SELECT * FROM `employee` WHERE `username` = ? AND `password` = ?";
+    const params = byEmpId
+      ? [req.body.emp_id]
+      : [req.body.username, req.body.password];
   
-    /* 2) สร้าง SQL กับ params ตามวิธี login */
-    let sql, params;
-    if (emp_id) {
-      sql =
-        "SELECT emp_id, emp_name, role, emp_database, emp_datapass \
-         FROM employee WHERE emp_id = ?";
-      params = [emp_id];
-    } else {
-      sql =
-        "SELECT emp_id, emp_name, role, emp_database, emp_datapass \
-         FROM employee WHERE username = ? AND password = ?";
-      params = [username, password];
-    }
-  
-    /* 3) คิวรีฐานข้อมูลกลาง (companydb) เพื่อดึงข้อมูลพนักงาน */
-    companydb.query(sql, params, (err, rows) => {
+    /* คิวรีฐานข้อมูลกลาง */
+    companydb.query(sql, params, (err, results) => {
       if (err) {
-        console.error("Error fetching employee:", err.message);
-        return res.status(500).json({ error: "Database error" });
+        console.error("Error fetching data:", err.message);
+        return res.status(500).json({ error: "Failed to fetch data" });
       }
   
-      /* ไม่พบข้อมูล => เครดิตเชลผิด */
-      if (!rows || rows.length === 0) {
-        return res.status(401).json({ error: "รหัสผ่านหรือผู้ใช้ไม่ถูกต้อง" });
+      /* ---------- ป้องกันแครช ---------- */
+      if (!results || results.length === 0) {
+        return res
+          .status(401)
+          .json({ error: "Invalid credentials or employee not found" });
       }
+      /* ---------------------------------- */
   
-      const {
-        emp_id: eid,
-        emp_name,
-        role,
-        emp_database,
-        emp_datapass,
-      } = rows[0];
+      const newDatabase = results[0].emp_database;
+      const newUser     = results[0].emp_database;
+      const newPassword = results[0].emp_datapass;
   
-      /* 4) เปลี่ยน connection หลัก (db) ไปยัง DB ของบริษัทนั้น */
+      /* เปลี่ยน connection ไปยัง DB บริษัทนั้น */
       db.changeUser(
         {
-          user: emp_database,
-          password: emp_datapass,
-          database: emp_database,
+          user: newUser,
+          password: newPassword,
+          database: newDatabase,
         },
         (changeErr) => {
           if (changeErr) {
-            console.error("Error switching DB:", changeErr.message);
-            return res
-              .status(500)
-              .json({ error: "สลับฐานข้อมูลไม่สำเร็จ กรุณาลองใหม่" });
+            console.error("Error changing database:", changeErr.message);
+            return res.status(500).json({ error: "Failed to switch database" });
           }
-  
-          /* 5) ตอบกลับ (อย่าคืนรหัสผ่านหรือชื่อฐานข้อมูลให้ client) */
-          return res.json({
-            success: true,
-            emp_id: eid,
-            emp_name,
-            role,
-          });
+          /* ส่งกลับ results เหมือนเดิม */
+          return res.json(results);
         }
       );
     });
   });
-  
+    
 
 app.post('/logout', (req, res) => {
     db.changeUser(
