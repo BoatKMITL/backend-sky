@@ -1541,33 +1541,52 @@ app.post('/editsendaddr', (req, res) => {
 // Setting-------------------------------------------------------------------------------------------------------------------
 app.get("/company_info", (req, res) => {
     const { emp_id } = req.query;
-    const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
+  
+    /* 1) ตรวจ param */
+    if (!emp_id) {
+      return res.status(400).json({ error: "emp_id is required" });
+    }
+  
+    /* 2) ดึงชื่อบริษัท */
+    const query = "SELECT company_name FROM `employee` WHERE `emp_id` = ?";
     companydb.query(query, [emp_id], (err, results) => {
-        if (err) {
-            console.error("Error fetching data:", err.message);
-            res.status(500).json({ error: "Failed to fetch data" });
-        } else {
-            const filePath = `${results[0].company_name}/company_info.json`;
-            if (!fs.existsSync(filePath)) {
-                fs.writeFile(filePath, '{}', (err) => {
-                    if (err) {
-                        console.error("Error writing file:", err);
-                    } else {
-                        console.log("Empty data file created successfully!");
-                    }
-                });
-            }
-            fs.readFile(filePath, "utf-8", (err, data) => {
-                if (err) {
-                    console.error("Error reading JSON file:", err);
-                    res.status(500).json({ error: "Failed to load company information" });
-                } else {
-                    res.json(JSON.parse(data));
-                }
-            });
+      if (err) {
+        console.error("Error fetching data:", err.message);
+        return res.status(500).json({ error: "Database error" });
+      }
+  
+      /* 3) ไม่พบพนักงาน */
+      if (!results || results.length === 0) {
+        return res.status(404).json({ error: "Employee not found" });
+      }
+  
+      const { company_name } = results[0];
+  
+      /* 4) เตรียม path */
+      const dirPath  = path.join(__dirname, company_name);
+      const filePath = path.join(dirPath, "company_info.json");
+  
+      /* 5) ทำงานกับไฟล์/โฟลเดอร์แบบ async‑safe */
+      try {
+        // สร้างโฟลเดอร์ถ้าไม่มี
+        if (!fs.existsSync(dirPath)) {
+          fs.mkdirSync(dirPath, { recursive: true });
         }
+  
+        // สร้างไฟล์ว่างถ้าไม่มี
+        if (!fs.existsSync(filePath)) {
+          fs.writeFileSync(filePath, "{}");
+        }
+  
+        // อ่านข้อมูลและส่งกลับ
+        const data = fs.readFileSync(filePath, "utf-8");
+        return res.json(JSON.parse(data));
+      } catch (fsErr) {
+        console.error("Filesystem error:", fsErr);
+        return res.status(500).json({ error: "Failed to load company information" });
+      }
     });
-});
+  });
 
 app.get("/dropdown", (req, res) => {
     const { emp_id } = req.query;
