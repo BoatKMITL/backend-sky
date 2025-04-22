@@ -24,64 +24,79 @@ const companydb = mysql.createConnection({
     database: "sharebil_sky4you",
 });
 // Login-------------------------------------------------------------------------------------------------------------------
-app.post('/login', (req, res) => {
-    if (req.body.emp_id !== undefined) {
-        const emp_id = req.body.emp_id;
-        const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-        companydb.query(query, [emp_id], (err, results) => {
-            if (err) {
-                console.error("Error fetching data:", err.message);
-                res.status(500).json({ error: "Failed to fetch data" });
-            } else {
-                const newDatabase = results[0].emp_database; // Example of dynamic DB
-                const newUser = results[0].emp_database; // Example of dynamic user
-                const newPassword = results[0].emp_datapass; // Example of dynamic password
-                db.changeUser(
-                    {
-                        user: newUser,
-                        password: newPassword,
-                        database: newDatabase,
-                    },
-                    (changeErr) => {
-                        if (changeErr) {
-                            console.error("Error changing database:", changeErr.message);
-                            return res.status(500).json({ error: "Failed to switch database" });
-                        }
-                        res.json(results);
-                    }
-                );
-            }
-        });
-    } else {
-        const username = req.body.username;
-        const password = req.body.password;
-        const query = "SELECT * FROM `employee` WHERE `username` = ? AND `password` = ?";
-        companydb.query(query, [username, password], (err, results) => {
-            if (err) {
-                console.error("Error fetching data:", err.message);
-                res.status(500).json({ error: "Failed to fetch data" });
-            } else {
-                const newDatabase = results[0].emp_database; // Example of dynamic DB
-                const newUser = results[0].emp_database; // Example of dynamic user
-                const newPassword = results[0].emp_datapass; // Example of dynamic password
-                db.changeUser(
-                    {
-                        user: newUser,
-                        password: newPassword,
-                        database: newDatabase,
-                    },
-                    (changeErr) => {
-                        if (changeErr) {
-                            console.error("Error changing database:", changeErr.message);
-                            return res.status(500).json({ error: "Failed to switch database" });
-                        }
-                        res.json(results);
-                    }
-                );
-            }
-        });
+/* ------------------------- /login (เวอร์ชันปลอดภัย) ------------------------- */
+app.post("/login", (req, res) => {
+    /* รับค่าที่มากับ body */
+    const { emp_id, username, password } = req.body;
+  
+    /* 1) ตรวจสอบว่าผู้ใช้ส่งข้อมูลชนิดใดมา */
+    if (!emp_id && !(username && password)) {
+      return res
+        .status(400)
+        .json({ error: "กรุณาระบุ emp_id หรือ username / password" });
     }
-});
+  
+    /* 2) สร้าง SQL กับ params ตามวิธี login */
+    let sql, params;
+    if (emp_id) {
+      sql =
+        "SELECT emp_id, emp_name, role, emp_database, emp_datapass \
+         FROM employee WHERE emp_id = ?";
+      params = [emp_id];
+    } else {
+      sql =
+        "SELECT emp_id, emp_name, role, emp_database, emp_datapass \
+         FROM employee WHERE username = ? AND password = ?";
+      params = [username, password];
+    }
+  
+    /* 3) คิวรีฐานข้อมูลกลาง (companydb) เพื่อดึงข้อมูลพนักงาน */
+    companydb.query(sql, params, (err, rows) => {
+      if (err) {
+        console.error("Error fetching employee:", err.message);
+        return res.status(500).json({ error: "Database error" });
+      }
+  
+      /* ไม่พบข้อมูล => เครดิตเชลผิด */
+      if (!rows || rows.length === 0) {
+        return res.status(401).json({ error: "รหัสผ่านหรือผู้ใช้ไม่ถูกต้อง" });
+      }
+  
+      const {
+        emp_id: eid,
+        emp_name,
+        role,
+        emp_database,
+        emp_datapass,
+      } = rows[0];
+  
+      /* 4) เปลี่ยน connection หลัก (db) ไปยัง DB ของบริษัทนั้น */
+      db.changeUser(
+        {
+          user: emp_database,
+          password: emp_datapass,
+          database: emp_database,
+        },
+        (changeErr) => {
+          if (changeErr) {
+            console.error("Error switching DB:", changeErr.message);
+            return res
+              .status(500)
+              .json({ error: "สลับฐานข้อมูลไม่สำเร็จ กรุณาลองใหม่" });
+          }
+  
+          /* 5) ตอบกลับ (อย่าคืนรหัสผ่านหรือชื่อฐานข้อมูลให้ client) */
+          return res.json({
+            success: true,
+            emp_id: eid,
+            emp_name,
+            role,
+          });
+        }
+      );
+    });
+  });
+  
 
 app.post('/logout', (req, res) => {
     db.changeUser(
