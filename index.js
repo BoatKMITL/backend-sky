@@ -6,7 +6,40 @@ const fs = require("fs");
 const app = express();
 const CryptoJS = require("crypto-js");
 app.use(cors());
+
+/* ===== AES key (ควรเก็บใน .env) ===== */
+const EMP_KEY = process.env.EMP_ID_KEY || "sky45678you"; // ย้ายไป .env ภายหลังได้
+
+function decryptEmpId(enc) {
+  try {
+    const bytes = CryptoJS.AES.decrypt(enc, EMP_KEY);
+    const plain = bytes.toString(CryptoJS.enc.Utf8);
+    return plain || null;
+  } catch {
+    return null;
+  }
+}
+
 app.use(express.json());
+
+/* ถอดรหัส emp_id แล้วเขียนทับของเก่า */
+app.use((req, _res, next) => {
+  if (req.query.emp_id) {
+    const plain = decryptEmpId(req.query.emp_id);
+    if (plain) {
+      req.query.emp_id_raw = req.query.emp_id; // เก็บต้นฉบับเผื่ออยากใช้
+      req.query.emp_id = plain; // เขียนทับ → โค้ดเดิมใช้ได้ทันที
+    }
+  }
+  if (req.body && req.body.emp_id) {
+    const plain = decryptEmpId(req.body.emp_id);
+    if (plain) {
+      req.body.emp_id_raw = req.body.emp_id;
+      req.body.emp_id = plain;
+    }
+  }
+  next();
+});
 
 const db = mysql.createConnection({
   host: "th257.ruk-com.in.th",
