@@ -64,6 +64,14 @@ function switchToEmployeeDB(emp_id) {
   });
 }
 
+function firstRowOr404(res, rows, notFoundMsg = "Employee not found") {
+  if (!rows || rows.length === 0) {
+    res.status(404).json({ error: notFoundMsg });
+    return null; // caller ต้องเช็กว่าเป็น null ไหม
+  }
+  return rows[0];
+}
+
 // Login-------------------------------------------------------------------------------------------------------------------
 
 app.post("/login", (req, res) => {
@@ -1734,95 +1742,83 @@ app.post("/editsendaddr", (req, res) => {
 // Setting-------------------------------------------------------------------------------------------------------------------
 app.get("/company_info", (req, res) => {
   const { emp_id } = req.query;
+  if (!emp_id) return res.status(400).json({ error: "emp_id is required" });
 
-  /* 1) ตรวจ param */
-  if (!emp_id) {
-    return res.status(400).json({ error: "emp_id is required" });
-  }
-
-  /* 2) ดึงชื่อบริษัท */
-  const query = "SELECT company_name FROM `employee` WHERE `emp_id` = ?";
-  companydb.query(query, [emp_id], (err, results) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      return res.status(500).json({ error: "Database error" });
-    }
-
-    /* 3) ไม่พบพนักงาน */
-    if (!results || results.length === 0) {
-      return res.status(404).json({ error: "Employee not found" });
-    }
-
-    const { company_name } = results[0];
-
-    /* 4) เตรียม path */
-    const dirPath = path.join(__dirname, company_name);
-    const filePath = path.join(dirPath, "company_info.json");
-
-    /* 5) ทำงานกับไฟล์/โฟลเดอร์แบบ async‑safe */
-    try {
-      // สร้างโฟลเดอร์ถ้าไม่มี
-      if (!fs.existsSync(dirPath)) {
-        fs.mkdirSync(dirPath, { recursive: true });
+  companydb.query(
+    "SELECT company_name FROM employee WHERE emp_id = ?",
+    [emp_id],
+    (err, results) => {
+      if (err) {
+        console.error("Error fetching data:", err.message);
+        return res.status(500).json({ error: "Database error" });
       }
 
-      // สร้างไฟล์ว่างถ้าไม่มี
-      if (!fs.existsSync(filePath)) {
-        fs.writeFileSync(filePath, "{}");
-      }
+      const row = firstRowOr404(res, results);
+      if (!row) return;
 
-      // อ่านข้อมูลและส่งกลับ
-      const data = fs.readFileSync(filePath, "utf-8");
-      return res.json(JSON.parse(data));
-    } catch (fsErr) {
-      console.error("Filesystem error:", fsErr);
-      return res
-        .status(500)
-        .json({ error: "Failed to load company information" });
+      const dirPath = path.join(__dirname, row.company_name);
+      const filePath = path.join(dirPath, "company_info.json");
+
+      try {
+        if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
+        if (!fs.existsSync(filePath)) fs.writeFileSync(filePath, "{}");
+
+        const data = fs.readFileSync(filePath, "utf-8");
+        res.json(JSON.parse(data));
+      } catch (fsErr) {
+        console.error("Filesystem error:", fsErr);
+        res.status(500).json({ error: "Failed to load company information" });
+      }
     }
-  });
+  );
 });
 
 app.get("/dropdown", (req, res) => {
   const { emp_id } = req.query;
-  const processedData = {
-    channels: [],
-    categories: [],
-    levels: [],
-  };
-  const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-  companydb.query(query, [emp_id], (err, results) => {
+
+  // ถ้าไม่ส่ง emp_id มาเลย
+  if (!emp_id) {
+    return res.status(400).json({ error: "emp_id is required" });
+  }
+
+  const emptyData = { channels: [], categories: [], levels: [] };
+  const sql = "SELECT * FROM `employee` WHERE `emp_id` = ?";
+
+  companydb.query(sql, [emp_id], (err, results) => {
     if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    } else {
-      const filePath = `${results[0].company_name}/dropdown.json`;
-      const dirPath = path.dirname(filePath);
-      if (!fs.existsSync(dirPath)) {
-        fs.mkdirSync(dirPath, { recursive: true });
-      }
-      if (!fs.existsSync(filePath)) {
-        fs.writeFile(
-          filePath,
-          JSON.stringify(processedData, null, 2),
-          (err) => {
-            if (err) {
-              console.error("Error writing file:", err);
-            } else {
-              console.log("Empty data file created successfully!");
-            }
-          }
-        );
-      }
-      fs.readFile(filePath, "utf-8", (err, data) => {
-        if (err) {
-          console.error("Error reading JSON file:", err);
-          res.status(500).json({ error: "Failed to load company information" });
-        } else {
-          res.json(JSON.parse(data));
-        }
-      });
+      console.error("DB error:", err.message);
+      return res.status(500).json({ error: "Failed to fetch data" });
     }
+
+    /* ✅  จุดกันล้ม – ไม่มีพนักงานตาม emp_id */
+    if (!results || results.length === 0) {
+      return res.status(404).json({ error: "Employee not found" });
+    }
+
+    const companyName = results[0].company_name; // ปลอดภัยแล้ว
+    const filePath = path.join(__dirname, companyName, "dropdown.json");
+    const dirPath = path.dirname(filePath);
+
+    // สร้างโฟลเดอร์ถ้ายังไม่มี
+    if (!fs.existsSync(dirPath)) {
+      fs.mkdirSync(dirPath, { recursive: true });
+    }
+
+    // สร้างไฟล์เปล่าถ้ายังไม่มี
+    if (!fs.existsSync(filePath)) {
+      fs.writeFileSync(filePath, JSON.stringify(emptyData, null, 2));
+    }
+
+    // อ่านไฟล์และส่งกลับ
+    fs.readFile(filePath, "utf-8", (err, data) => {
+      if (err) {
+        console.error("Read file error:", err.message);
+        return res
+          .status(500)
+          .json({ error: "Failed to load company information" });
+      }
+      res.json(JSON.parse(data));
+    });
   });
 });
 
@@ -1867,36 +1863,37 @@ app.post("/editdropdown", (req, res) => {
 
 app.get("/price", (req, res) => {
   const { emp_id } = req.query;
-  const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-  companydb.query(query, [emp_id], (err, results) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    } else {
-      const filePath = `${results[0].company_name}/price.json`;
-      const dirPath = path.dirname(filePath);
-      if (!fs.existsSync(dirPath)) {
-        fs.mkdirSync(dirPath, { recursive: true });
+  if (!emp_id) return res.status(400).json({ error: "emp_id is required" });
+
+  companydb.query(
+    "SELECT company_name FROM employee WHERE emp_id = ?",
+    [emp_id],
+    (err, results) => {
+      if (err) {
+        console.error("Error fetching data:", err.message);
+        return res.status(500).json({ error: "Failed to fetch data" });
       }
-      if (!fs.existsSync(filePath)) {
-        fs.writeFile(filePath, "{}", (err) => {
-          if (err) {
-            console.error("Error writing file:", err);
-          } else {
-            console.log("Empty data file created successfully!");
-          }
-        });
-      }
+
+      const row = firstRowOr404(res, results);
+      if (!row) return; // จบงานถ้าไม่เจอพนักงาน
+
+      const dirPath = path.join(__dirname, row.company_name);
+      const filePath = path.join(dirPath, "price.json");
+
+      if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
+      if (!fs.existsSync(filePath)) fs.writeFileSync(filePath, "{}");
+
       fs.readFile(filePath, "utf-8", (err, data) => {
         if (err) {
-          console.error("Error reading JSON file:", err);
-          res.status(500).json({ error: "Failed to load company information" });
-        } else {
-          res.json(JSON.parse(data));
+          console.error("Read file error:", err.message);
+          return res
+            .status(500)
+            .json({ error: "Failed to load company information" });
         }
+        res.json(JSON.parse(data));
       });
     }
-  });
+  );
 });
 
 app.post("/editprice", (req, res) => {
@@ -1925,36 +1922,37 @@ app.post("/editprice", (req, res) => {
 });
 app.get("/promotion", (req, res) => {
   const { emp_id } = req.query;
-  const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-  companydb.query(query, [emp_id], (err, results) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    } else {
-      const filePath = `${results[0].company_name}/promotion.json`;
-      const dirPath = path.dirname(filePath);
-      if (!fs.existsSync(dirPath)) {
-        fs.mkdirSync(dirPath, { recursive: true });
+  if (!emp_id) return res.status(400).json({ error: "emp_id is required" });
+
+  companydb.query(
+    "SELECT company_name FROM employee WHERE emp_id = ?",
+    [emp_id],
+    (err, results) => {
+      if (err) {
+        console.error("Error fetching data:", err.message);
+        return res.status(500).json({ error: "Failed to fetch data" });
       }
-      if (!fs.existsSync(filePath)) {
-        fs.writeFile(filePath, "{}", (err) => {
-          if (err) {
-            console.error("Error writing file:", err);
-          } else {
-            console.log("Empty data file created successfully!");
-          }
-        });
-      }
+
+      const row = firstRowOr404(res, results);
+      if (!row) return;
+
+      const dirPath = path.join(__dirname, row.company_name);
+      const filePath = path.join(dirPath, "promotion.json");
+
+      if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
+      if (!fs.existsSync(filePath)) fs.writeFileSync(filePath, "{}");
+
       fs.readFile(filePath, "utf-8", (err, data) => {
         if (err) {
-          console.error("Error reading JSON file:", err);
-          res.status(500).json({ error: "Failed to load company information" });
-        } else {
-          res.json(JSON.parse(data));
+          console.error("Read file error:", err.message);
+          return res
+            .status(500)
+            .json({ error: "Failed to load company information" });
         }
+        res.json(JSON.parse(data));
       });
     }
-  });
+  );
 });
 
 app.post("/editpromotion", (req, res) => {
@@ -1984,36 +1982,37 @@ app.post("/editpromotion", (req, res) => {
 
 app.get("/warehouse", (req, res) => {
   const { emp_id } = req.query;
-  const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-  companydb.query(query, [emp_id], (err, results) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    } else {
-      const filePath = `${results[0].company_name}/warehouse.json`;
-      const dirPath = path.dirname(filePath);
-      if (!fs.existsSync(dirPath)) {
-        fs.mkdirSync(dirPath, { recursive: true });
+  if (!emp_id) return res.status(400).json({ error: "emp_id is required" });
+
+  companydb.query(
+    "SELECT company_name FROM employee WHERE emp_id = ?",
+    [emp_id],
+    (err, results) => {
+      if (err) {
+        console.error("Error fetching data:", err.message);
+        return res.status(500).json({ error: "Failed to fetch data" });
       }
-      if (!fs.existsSync(filePath)) {
-        fs.writeFile(filePath, "{}", (err) => {
-          if (err) {
-            console.error("Error writing file:", err);
-          } else {
-            console.log("Empty data file created successfully!");
-          }
-        });
-      }
+
+      const row = firstRowOr404(res, results);
+      if (!row) return;
+
+      const dirPath = path.join(__dirname, row.company_name);
+      const filePath = path.join(dirPath, "warehouse.json");
+
+      if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
+      if (!fs.existsSync(filePath)) fs.writeFileSync(filePath, "{}");
+
       fs.readFile(filePath, "utf-8", (err, data) => {
         if (err) {
-          console.error("Error reading JSON file:", err);
-          res.status(500).json({ error: "Failed to load company information" });
-        } else {
-          res.json(JSON.parse(data));
+          console.error("Read file error:", err.message);
+          return res
+            .status(500)
+            .json({ error: "Failed to load company information" });
         }
+        res.json(JSON.parse(data));
       });
     }
-  });
+  );
 });
 
 app.post("/editwarehoussetting", (req, res) => {
