@@ -116,7 +116,7 @@ app.post("/login", (req, res) => {
     ? "SELECT * FROM `employee` WHERE `emp_id` = ?"
     : "SELECT * FROM `employee` WHERE `username` = ? AND `password` = ?";
   const params = byEmpId
-    ? [decryptEmpId(req.body.emp_id)]
+    ? [req.body.emp_id]
     : [req.body.username, req.body.password];
 
   /* คิวรีฐานข้อมูลกลาง */
