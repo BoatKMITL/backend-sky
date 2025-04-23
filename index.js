@@ -143,7 +143,7 @@ app.post("/login", (req, res) => {
       {
         user: newUser,
         password: newPassword,
-        database: newDatabase,
+        database: newDatabase, 
       },
       (changeErr) => {
         if (changeErr) {
