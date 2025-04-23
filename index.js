@@ -1816,7 +1816,7 @@ app.get("/dropdown", (req, res) => {
 
   const emptyData = { channels: [], categories: [], levels: [] };
   const sql = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-  console.log("dddd", decryptEmpId(emp_id))
+  console.log("dddd", decryptEmpId(emp_id), emp_id)
   companydb.query(sql, [decryptEmpId(emp_id)], (err, results) => {
     if (err) {
       console.error("DB error:", err.message);
