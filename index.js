@@ -2097,7 +2097,7 @@ app.get("/employee", (req, res) => {
 app.get("/employeeinfo", (req, res) => {
   const { id } = req.query;
   const query = "SELECT * FROM `employee` WHERE `employee`.`emp_id` = ?;";
-  companydb.query(query, [id], (err, results) => {
+  companydb.query(query, [decryptEmpId(id)], (err, results) => {
     if (err) {
       console.error("Error fetching data:", err.message);
       res.status(500).json({ error: "Failed to fetch data" });
