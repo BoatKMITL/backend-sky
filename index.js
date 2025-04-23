@@ -1779,7 +1779,7 @@ app.get("/company_info", (req, res) => {
 
   companydb.query(
     "SELECT company_name FROM employee WHERE emp_id = ?",
-    [decryptEmpId(emp_id)],
+    [emp_id],
     (err, results) => {
       if (err) {
         console.error("Error fetching data:", err.message);
@@ -1816,8 +1816,7 @@ app.get("/dropdown", (req, res) => {
 
   const emptyData = { channels: [], categories: [], levels: [] };
   const sql = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-  console.log("dddd", decryptEmpId(emp_id), emp_id)
-  companydb.query(sql, [decryptEmpId(emp_id)], (err, results) => {
+  companydb.query(sql, [emp_id], (err, results) => {
     if (err) {
       console.error("DB error:", err.message);
       return res.status(500).json({ error: "Failed to fetch data" });
@@ -1873,7 +1872,7 @@ app.post("/editdropdown", (req, res) => {
   };
   const emp_id = req.body.emp_id;
   const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-  companydb.query(query, [decryptEmpId(emp_id)], (err, results) => {
+  companydb.query(query, [emp_id], (err, results) => {
     if (err) {
       console.error("Error fetching data:", err.message);
       res.status(500).json({ error: "Failed to fetch data" });
@@ -1900,7 +1899,7 @@ app.get("/price", (req, res) => {
 
   companydb.query(
     "SELECT company_name FROM employee WHERE emp_id = ?",
-    [decryptEmpId(emp_id)],
+    [emp_id],
     (err, results) => {
       if (err) {
         console.error("Error fetching data:", err.message);
@@ -1933,7 +1932,7 @@ app.post("/editprice", (req, res) => {
   const emp_id = req.body.emp_id;
   const newData = req.body.updatedPricing;
   const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-  companydb.query(query, [decryptEmpId(emp_id)], (err, results) => {
+  companydb.query(query, [emp_id], (err, results) => {
     if (err) {
       console.error("Error fetching data:", err.message);
       res.status(500).json({ error: "Failed to fetch data" });
@@ -1959,7 +1958,7 @@ app.get("/promotion", (req, res) => {
 
   companydb.query(
     "SELECT company_name FROM employee WHERE emp_id = ?",
-    [decryptEmpId(emp_id)],
+    [emp_id],
     (err, results) => {
       if (err) {
         console.error("Error fetching data:", err.message);
@@ -1992,7 +1991,7 @@ app.post("/editpromotion", (req, res) => {
   const emp_id = req.body.emp_id;
   const newData = req.body.updatedPromotions;
   const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-  companydb.query(query, [decryptEmpId(emp_id)], (err, results) => {
+  companydb.query(query, [emp_id], (err, results) => {
     if (err) {
       console.error("Error fetching data:", err.message);
       res.status(500).json({ error: "Failed to fetch data" });
@@ -2019,7 +2018,7 @@ app.get("/warehouse", (req, res) => {
 
   companydb.query(
     "SELECT company_name FROM employee WHERE emp_id = ?",
-    [decryptEmpId(emp_id)],
+    [emp_id],
     (err, results) => {
       if (err) {
         console.error("Error fetching data:", err.message);
@@ -2052,7 +2051,7 @@ app.post("/editwarehoussetting", (req, res) => {
   const emp_id = req.body.emp_id;
   const newData = req.body;
   const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-  companydb.query(query, [decryptEmpId(emp_id)], (err, results) => {
+  companydb.query(query, [emp_id], (err, results) => {
     if (err) {
       console.error("Error fetching data:", err.message);
       res.status(500).json({ error: "Failed to fetch data" });
@@ -2076,7 +2075,7 @@ app.post("/editwarehoussetting", (req, res) => {
 app.get("/employee", (req, res) => {
   const { emp_id } = req.query;
   const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-  companydb.query(query, [decryptEmpId(emp_id)], (err, results) => {
+  companydb.query(query, [emp_id], (err, results) => {
     if (err) {
       console.error("Error fetching data:", err.message);
       res.status(500).json({ error: "Failed to fetch data" });
@@ -2115,7 +2114,7 @@ app.post("/addemployee", (req, res) => {
   const emp_date = req.body.emp_date;
   const emp_id = req.body.emp_id;
   const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-  companydb.query(query, [decryptEmpId(emp_id)], (err, results) => {
+  companydb.query(query, [emp_id], (err, results) => {
     if (err) {
       console.error("Error fetching data:", err.message);
       res.status(500).json({ error: "Failed to fetch data" });
@@ -2186,7 +2185,7 @@ app.post("/deleteemployee", (req, res) => {
 app.post("/editcompany_info", (req, res) => {
   const emp_id = req.body.emp_id;
   const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-  companydb.query(query, [decryptEmpId(emp_id)], (err, results) => {
+  companydb.query(query, [emp_id], (err, results) => {
     if (err) {
       console.error("Error fetching data:", err.message);
       res.status(500).json({ error: "Failed to fetch data" });
