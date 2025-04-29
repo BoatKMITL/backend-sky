@@ -13,7 +13,7 @@ const EMP_KEY = process.env.EMP_ID_KEY || "sky45678you"; // ย้ายไป .
 function decryptEmpId(enc) {
   try {
     const encrypted = enc.replace(/-/g, "+").replace(/_/g, "/")+ "=".repeat((4 - base64url.length % 4) % 4);
-    const bytes = CryptoJS.AES.decrypt(decodeURIComponent(encrypted), EMP_KEY);
+    const bytes = CryptoJS.AES.decrypt(encrypted, EMP_KEY);
     const plain = bytes.toString(CryptoJS.enc.Utf8);
     return plain || null;
   } catch {
