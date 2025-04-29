@@ -12,7 +12,8 @@ const EMP_KEY = process.env.EMP_ID_KEY || "sky45678you"; // ย้ายไป .
 
 function decryptEmpId(enc) {
   try {
-    const bytes = CryptoJS.AES.decrypt(decodeURIComponent(enc), EMP_KEY);
+    const encrypted = enc.replace(/-/g, "+").replace(/_/g, "/")+ "=".repeat((4 - base64url.length % 4) % 4);
+    const bytes = CryptoJS.AES.decrypt(decodeURIComponent(encrypted), EMP_KEY);
     const plain = bytes.toString(CryptoJS.enc.Utf8);
     return plain || null;
   } catch {
@@ -143,7 +144,7 @@ app.post("/login", (req, res) => {
       {
         user: newUser,
         password: newPassword,
-        database: newDatabase, 
+        database: newDatabase,
       },
       (changeErr) => {
         if (changeErr) {
@@ -1816,6 +1817,7 @@ app.get("/dropdown", (req, res) => {
 
   const emptyData = { channels: [], categories: [], levels: [] };
   const sql = "SELECT * FROM `employee` WHERE `emp_id` = ?";
+
   companydb.query(sql, [emp_id], (err, results) => {
     if (err) {
       console.error("DB error:", err.message);
