@@ -1603,7 +1603,7 @@ app.post("/addappoint", (req, res) => {
     .replace("T", " ")
     .replace(".000Z", "");
   const query1 =
-    "INSERT INTO `appointment` (`title`, `start_date`, `end_data`, `note`, `customer_id`, `address_pickup`, `phone_pickup`, `name_pickup`, `position`, `vehicle`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
+    "INSERT INTO `appointment` (`title`, `start_date`, `end_date`, `note`, `customer_id`, `address_pickup`, `phone_pickup`, `name_pickup`, `position`, `vehicle`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
   db.query(
     query1,
     [
