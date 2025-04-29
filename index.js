@@ -1571,7 +1571,7 @@ app.post("/editpriority", (req, res) => {
 // appointment-------------------------------------------------------------------------------------------------------------------
 
 app.get("/appointment", (req, res) => {
-  const query = "SELECT *, DATE_FORMAT(start_date, '%Y-%m-%d') AS formatted_start_date FROM appointment WHERE status = 'Pending'";
+  const query = "SELECT *, DATE_FORMAT(start_date, '%Y-%m-%d') AS formatted_start_date FROM appointment WHERE status = 'Pending' AND start_date > CURDATE() - INTERVAL 1 DAY;";
   db.query(query, (err, results) => {
     if (err) {
       console.error("Error fetching data:", err.message);
