@@ -2223,6 +2223,7 @@ const imageStorage = multer.diskStorage({
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true }); // Create directory if it doesn't exist
     }
+    console.log(uploadDir, fs.existsSync(uploadDir))
     cb(null, uploadDir); // Specify the upload directory for images
   },
   filename: (req, file, cb) => {
