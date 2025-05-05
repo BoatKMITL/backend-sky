@@ -2378,7 +2378,12 @@ app.post("/deleteLogoImages", (req, res) => {
           message: `Deleted ${logoFiles.length} logo image(s)`,
         });
       });
-    };
+    } else {
+      res.status(200).json({
+        success: true,
+        message: `Deleted 0 logo image(s)`,
+      });
+    }
   } catch (error) {
     console.error("Error handling delete request:", error.message);
     res.status(500).json({ success: false, message: "Internal server error" });
