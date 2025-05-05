@@ -1878,7 +1878,8 @@ app.post("/editdropdown", (req, res) => {
       console.error("Error fetching data:", err.message);
       res.status(500).json({ error: "Failed to fetch data" });
     } else {
-      const filePath = `${results[0].company_name}/dropdown.json`;
+      const file = `${results[0].company_name}/dropdown.json`;
+      const filePath  = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, file);
       const dirPath = path.dirname(filePath);
       if (!fs.existsSync(dirPath)) {
         fs.mkdirSync(dirPath, { recursive: true });
@@ -1938,7 +1939,8 @@ app.post("/editprice", (req, res) => {
       console.error("Error fetching data:", err.message);
       res.status(500).json({ error: "Failed to fetch data" });
     } else {
-      const filePath = `${results[0].company_name}/price.json`;
+      const file = `${results[0].company_name}/price.json`;
+      const filePath  = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, file);
       const dirPath = path.dirname(filePath);
       if (!fs.existsSync(dirPath)) {
         fs.mkdirSync(dirPath, { recursive: true });
@@ -1997,7 +1999,8 @@ app.post("/editpromotion", (req, res) => {
       console.error("Error fetching data:", err.message);
       res.status(500).json({ error: "Failed to fetch data" });
     } else {
-      const filePath = `${results[0].company_name}/promotion.json`;
+      const file = `${results[0].company_name}/promotion.json`;
+      const filePath  = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, file);
       const dirPath = path.dirname(filePath);
       if (!fs.existsSync(dirPath)) {
         fs.mkdirSync(dirPath, { recursive: true });
@@ -2057,7 +2060,8 @@ app.post("/editwarehoussetting", (req, res) => {
       console.error("Error fetching data:", err.message);
       res.status(500).json({ error: "Failed to fetch data" });
     } else {
-      const filePath = `${results[0].company_name}/warehouse.json`;
+      const file = `${results[0].company_name}/warehouse.json`;
+      const filePath  = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, file);
       const dirPath = path.dirname(filePath);
       if (!fs.existsSync(dirPath)) {
         fs.mkdirSync(dirPath, { recursive: true });
@@ -2191,7 +2195,8 @@ app.post("/editcompany_info", (req, res) => {
       console.error("Error fetching data:", err.message);
       res.status(500).json({ error: "Failed to fetch data" });
     } else {
-      const filePath = `${results[0].company_name}/company_info.json`;
+      const file = `${results[0].company_name}/company_info.json`;
+      const filePath  = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, file);
       const dirPath = path.dirname(filePath);
       if (!fs.existsSync(dirPath)) {
         fs.mkdirSync(dirPath, { recursive: true });
