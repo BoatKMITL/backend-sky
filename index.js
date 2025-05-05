@@ -1831,7 +1831,7 @@ app.get("/dropdown", (req, res) => {
     const companyName = results[0].company_name; // ปลอดภัยแล้ว
     const filePath = path.join(__dirname, process.env.RAILWAY_VOLUME_MOUNT_PATH, companyName, "dropdown.json");
     const dirPath = path.dirname(filePath);
-
+    console.log(filePath)
     // สร้างโฟลเดอร์ถ้ายังไม่มี
     if (!fs.existsSync(dirPath)) {
       fs.mkdirSync(dirPath, { recursive: true });
@@ -1880,8 +1880,11 @@ app.post("/editdropdown", (req, res) => {
     } else {
       const file = `${results[0].company_name}/dropdown.json`;
       const filePath  = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, file);
+      console.log(filePath)
       const dirPath = path.dirname(filePath);
+      console.log(dirPath)
       if (!fs.existsSync(dirPath)) {
+        console.log(11111)
         fs.mkdirSync(dirPath, { recursive: true });
       }
       fs.writeFile(filePath, JSON.stringify(processedData, null, 2), (err) => {
