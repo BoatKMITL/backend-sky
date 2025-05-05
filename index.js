@@ -2223,7 +2223,6 @@ const imageStorage = multer.diskStorage({
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true }); // Create directory if it doesn't exist
     }
-    console.log(uploadDir, fs.existsSync(uploadDir))
     cb(null, uploadDir); // Specify the upload directory for images
   },
   filename: (req, file, cb) => {
@@ -2351,34 +2350,35 @@ app.post("/deleteLogoImages", (req, res) => {
   try {
     // Define the directory where the images are stored
     const directoryPath = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads", "img"); // Replace "uploads" with your directory
-
+    if (fs.existsSync(directoryPath)) {
     // Read all files in the directory
-    fs.readdir(directoryPath, (err, files) => {
-      if (err) {
-        console.error("Error reading directory:", err);
-        return res
-          .status(500)
-          .json({ success: false, message: "Error reading directory" });
-      }
+      fs.readdir(directoryPath, (err, files) => {
+        if (err) {
+          console.error("Error reading directory:", err);
+          return res
+            .status(500)
+            .json({ success: false, message: "Error reading directory" });
+        }
 
-      // Filter files starting with "logo"
-      const logoFiles = files.filter((file) => file.startsWith("logo"));
-      // Delete each matching file
-      if (logoFiles.length > 0) {
-        const filePath = path.join(directoryPath, logoFiles[0]);
-        fs.unlink(filePath, (err) => {
-          if (err) {
-            console.error(`Error deleting file ${logoFiles[0]}:`, err);
-          } else {
-            console.log(`Deleted file: ${logoFiles[0]}`);
-          }
+        // Filter files starting with "logo"
+        const logoFiles = files.filter((file) => file.startsWith("logo"));
+        // Delete each matching file
+        if (logoFiles.length > 0) {
+          const filePath = path.join(directoryPath, logoFiles[0]);
+          fs.unlink(filePath, (err) => {
+            if (err) {
+              console.error(`Error deleting file ${logoFiles[0]}:`, err);
+            } else {
+              console.log(`Deleted file: ${logoFiles[0]}`);
+            }
+          });
+        }
+        res.status(200).json({
+          success: true,
+          message: `Deleted ${logoFiles.length} logo image(s)`,
         });
-      }
-      res.status(200).json({
-        success: true,
-        message: `Deleted ${logoFiles.length} logo image(s)`,
       });
-    });
+    };
   } catch (error) {
     console.error("Error handling delete request:", error.message);
     res.status(500).json({ success: false, message: "Internal server error" });
