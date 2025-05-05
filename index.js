@@ -1789,7 +1789,7 @@ app.get("/company_info", (req, res) => {
       const row = firstRowOr404(res, results);
       if (!row) return;
 
-      const dirPath = path.join(__dirname, process.env.RAILWAY_VOLUME_MOUNT_PATH, row.company_name);
+      const dirPath = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, row.company_name);
       const filePath = path.join(dirPath, "company_info.json");
 
       try {
@@ -1829,9 +1829,8 @@ app.get("/dropdown", (req, res) => {
     }
 
     const companyName = results[0].company_name; // ปลอดภัยแล้ว
-    const filePath = path.join(__dirname, process.env.RAILWAY_VOLUME_MOUNT_PATH, companyName, "dropdown.json");
+    const filePath = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, companyName, "dropdown.json");
     const dirPath = path.dirname(filePath);
-    console.log(filePath)
     // สร้างโฟลเดอร์ถ้ายังไม่มี
     if (!fs.existsSync(dirPath)) {
       fs.mkdirSync(dirPath, { recursive: true });
@@ -1880,11 +1879,8 @@ app.post("/editdropdown", (req, res) => {
     } else {
       const file = `${results[0].company_name}/dropdown.json`;
       const filePath  = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, file);
-      console.log(filePath)
       const dirPath = path.dirname(filePath);
-      console.log(dirPath)
       if (!fs.existsSync(dirPath)) {
-        console.log(11111)
         fs.mkdirSync(dirPath, { recursive: true });
       }
       fs.writeFile(filePath, JSON.stringify(processedData, null, 2), (err) => {
@@ -1914,7 +1910,7 @@ app.get("/price", (req, res) => {
       const row = firstRowOr404(res, results);
       if (!row) return; // จบงานถ้าไม่เจอพนักงาน
 
-      const dirPath = path.join(__dirname, process.env.RAILWAY_VOLUME_MOUNT_PATH, row.company_name);
+      const dirPath = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, row.company_name);
       const filePath = path.join(dirPath, "price.json");
 
       if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
@@ -1974,7 +1970,7 @@ app.get("/promotion", (req, res) => {
       const row = firstRowOr404(res, results);
       if (!row) return;
 
-      const dirPath = path.join(__dirname, process.env.RAILWAY_VOLUME_MOUNT_PATH, row.company_name);
+      const dirPath = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, row.company_name);
       const filePath = path.join(dirPath, "promotion.json");
 
       if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
@@ -2035,7 +2031,7 @@ app.get("/warehouse", (req, res) => {
       const row = firstRowOr404(res, results);
       if (!row) return;
 
-      const dirPath = path.join(__dirname, process.env.RAILWAY_VOLUME_MOUNT_PATH, row.company_name);
+      const dirPath = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, row.company_name);
       const filePath = path.join(dirPath, "warehouse.json");
 
       if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
@@ -2223,7 +2219,7 @@ const multer = require("multer");
 
 const imageStorage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadDir = path.join(__dirname, process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads", "img"); // Ensure the folder path for images
+    const uploadDir = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads", "img"); // Ensure the folder path for images
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true }); // Create directory if it doesn't exist
     }
@@ -2296,7 +2292,7 @@ app.post("/uploadItemImage", uploadImage.single("itemImage"), (req, res) => {
         .json({ success: false, message: "No file uploaded" });
     }
 
-    const uploadDir = path.join(__dirname, process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads", "img");
+    const uploadDir = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads", "img");
     const newFilePath = path.join(uploadDir, fileName);
 
     // Rename the file to the desired format
@@ -2353,7 +2349,7 @@ app.post("/uploadVerifyImg", uploadImage.single("verifyImg"), (req, res) => {
 app.post("/deleteLogoImages", (req, res) => {
   try {
     // Define the directory where the images are stored
-    const directoryPath = path.join(__dirname, process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads", "img"); // Replace "uploads" with your directory
+    const directoryPath = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads", "img"); // Replace "uploads" with your directory
 
     // Read all files in the directory
     fs.readdir(directoryPath, (err, files) => {
@@ -2392,7 +2388,7 @@ app.post("/deletePackageImages", (req, res) => {
   try {
     // Define the directory where the images are stored
     const { photo_url } = req.body;
-    const directoryPath = path.join(__dirname, process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads", "img"); // Replace "uploads" with your directory
+    const directoryPath = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads", "img"); // Replace "uploads" with your directory
     // Read all files in the directory
 
     fs.readdir(directoryPath, (err, files) => {
@@ -2431,7 +2427,7 @@ app.post("/deleteImagesByName", (req, res) => {
   try {
     const { photo_url } = req.body; // Expecting an array of filenames from the client
     // Define the directory where the images are stored
-    const directoryPath = path.join(__dirname, process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads", "img"); // Replace with your directory
+    const directoryPath = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads", "img"); // Replace with your directory
     // Iterate through the provided filenames and delete them
     if (photo_url !== undefined) {
       const filePath = path.join(directoryPath, photo_url);
@@ -2458,12 +2454,12 @@ app.post("/deleteImagesByName", (req, res) => {
 });
 //--------------------------------------------------- DOCUMENT UPLOAD ---------------------------------------------------
 
-app.use("/uploads/img", express.static(path.join(__dirname, process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads", "img")));
+app.use("/uploads/img", express.static(path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads", "img")));
 
 // Enhanced storage configuration
 const documentStorage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadDir = path.join(__dirname, process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads", "doc");
+    const uploadDir = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads", "doc");
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });
     }
@@ -2490,13 +2486,13 @@ app.post("/uploadDocument", uploadDocument.single("document"), (req, res) => {
     }
 
     // Failsafe: Check directory existence after upload
-    const uploadDir = path.resolve(__dirname, process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads", "doc");
+    const uploadDir = path.resolve(process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads", "doc");
     if (!fs.existsSync(uploadDir)) {
       console.error("Upload directory missing after upload:", uploadDir);
       throw new Error("Upload directory vanished unexpectedly.");
     }
 
-    const savedPath = path.join(__dirname, process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads", "doc", file.originalname);
+    const savedPath = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads", "doc", file.originalname);
     console.log("File saved successfully at:", savedPath);
 
     res.status(200).json({
