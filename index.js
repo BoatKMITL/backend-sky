@@ -9,7 +9,6 @@ app.use(cors());
 
 require("dotenv").config();
 process.env.AWS_S3_DISABLE_CHECKSUMS = "true";   // ปิด CRC32 placeholder
-const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
 const s3 = new S3Client({
