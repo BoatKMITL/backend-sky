@@ -2388,32 +2388,36 @@ app.post("/uploadSlip", uploadImage.single("slip"), (req, res) => {
 //   }
 // });
 
-app.get("/uploadVerifyImg", async (req, res) => {
+app.post('/uploadVerifyImg', async (req, res) => {
   try {
-    const { fileName, contentType = "image/jpeg" } = req.query;
-    if (!fileName)
-      return res.status(400).json({ error: "fileName is required" });
+    /* ---- รับพารามิเตอร์ ----
+       – ถ้ามาส่งเป็น query string ก็ยังใช้ req.query ได้
+       – ถ้าส่งใน body (JSON/form-urlencode) ให้สลับเป็น req.body แทน
+    */
+    const { fileName, contentType = 'image/jpeg' } = req.query; // หรือ req.body
+    if (!fileName) return res.status(400).json({ error: 'fileName is required' });
 
-    // path เต็มภายใน bucket
+    // full path ใน bucket
     const key = `${process.env.AWS_S3_PREFIX}/${fileName}`;
 
+    /* สร้างคำสั่ง PutObject */
     const command = new PutObjectCommand({
       Bucket: process.env.AWS_BUCKET,
       Key: key,
       ContentType: contentType,
-      ACL: "private",           // หรือ "public-read" ถ้าต้องการเปิดตรง ๆ
+      ACL: 'private',            // 'public-read' ถ้าต้องการเปิดสาธารณะ
     });
 
     // presigned URL อายุ 15 นาที
     const presignedUrl = await getSignedUrl(s3, command, { expiresIn: 900 });
 
-    /* publicUrl = URL ถาวร หากเปิด object public  */
+    // URL ถาวร (ถ้า object เปิด public)
     const publicUrl = `https://${process.env.AWS_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
 
-    return res.json({ presignedUrl, publicUrl });
-  } catch (e) {
-    console.error("presign error:", e);
-    res.status(500).json({ error: "Failed to create presigned URL" });
+    res.json({ presignedUrl, publicUrl });
+  } catch (err) {
+    console.error('presign error:', err);
+    res.status(500).json({ error: 'Failed to create presigned URL' });
   }
 });
 
