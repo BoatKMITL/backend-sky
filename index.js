@@ -8,7 +8,6 @@ const CryptoJS = require("crypto-js");
 app.use(cors());
 
 require("dotenv").config();
-process.env.AWS_S3_DISABLE_CHECKSUMS = "true";   // ปิด CRC32 placeholder
 const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3"); // <--- เพิ่มตรงนี้
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
@@ -2389,35 +2388,64 @@ app.post("/uploadSlip", uploadImage.single("slip"), (req, res) => {
 // });
 
 app.post("/uploadVerifyImg", async (req, res) => {
+  console.log("Backend: Received POST /uploadVerifyImg");
+  console.log("Backend: Query params:", req.query);
   try {
-    /* ---- รับพารามิเตอร์ ----
-       – ถ้ามาส่งเป็น query string ก็ยังใช้ req.query ได้
-       – ถ้าส่งใน body (JSON/form-urlencode) ให้สลับเป็น req.body แทน
-    */
-    const { fileName, contentType = "image/jpeg" } = req.query; // หรือ req.body
-    if (!fileName)
+    const { fileName, contentType } = req.query; // ควรจะมาจาก req.query ตามที่ Frontend ส่ง
+
+    if (!fileName) {
+      console.error("Backend Error: fileName is required in query parameters.");
       return res.status(400).json({ error: "fileName is required" });
+    }
+    if (!contentType) {
+      console.error(
+        "Backend Error: contentType is required in query parameters."
+      );
+      return res.status(400).json({ error: "contentType is required" });
+    }
 
-    // full path ใน bucket
-    const key = `${process.env.AWS_S3_PREFIX}/${fileName}`;
+    console.log(
+      `Backend: Processing fileName: ${fileName}, contentType: ${contentType}`
+    );
 
-    /* สร้างคำสั่ง PutObject */
+    // ตรวจสอบว่า AWS_S3_PREFIX ถูกตั้งค่าใน .env และไม่ลงท้ายด้วย /
+    // และ fileName ไม่ขึ้นต้นด้วย / เพื่อป้องกัน // ใน key
+    const s3Key = `${process.env.AWS_S3_PREFIX}/${
+      fileName.startsWith("/") ? fileName.substring(1) : fileName
+    }`;
+    console.log(`Backend: Generated S3 Key: ${s3Key}`);
+
     const command = new PutObjectCommand({
       Bucket: process.env.AWS_BUCKET,
-      Key: key,
-      ContentType: contentType, // ค่า default ของ S3 คือ private อยู่แล้ว
+      Key: s3Key,
+      ContentType: contentType,
+      // ไม่ต้องใส่ ACL: 'public-read' ที่นี่ ถ้าไม่ได้ต้องการให้ public ทันที
+      // และถ้าใส่ Client ต้องส่ง x-amz-acl header ด้วย
+      // ไม่ต้องใส่ ChecksumAlgorithm ที่นี่
     });
+    console.log("Backend: PutObjectCommand created");
 
-    // presigned URL อายุ 15 นาที
+    // Pre-signed URL อายุ 15 นาที (900 วินาที)
     const presignedUrl = await getSignedUrl(s3, command, { expiresIn: 900 });
+    console.log("Backend: Presigned URL generated:", presignedUrl);
 
-    // URL ถาวร (ถ้า object เปิด public)
-    const publicUrl = `https://${process.env.AWS_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
+    // URL ถาวร (สำหรับเข้าถึงไฟล์หลังจากอัปโหลดสำเร็จ และถ้า object นั้น public)
+    const publicUrl = `https://${process.env.AWS_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/${s3Key}`;
+    console.log("Backend: Public URL generated:", publicUrl);
 
     res.json({ presignedUrl, publicUrl });
   } catch (err) {
-    console.error("presign error:", err);
-    res.status(500).json({ error: "Failed to create presigned URL" });
+    console.error("!!!! Backend Critical Error in /uploadVerifyImg !!!!");
+    console.error("Error Name:", err.name);
+    console.error("Error Message:", err.message);
+    console.error("Error Stack:", err.stack);
+    // console.error("Full Error Object:", JSON.stringify(err, Object.getOwnPropertyNames(err)));
+
+    res.status(500).json({
+      error: "Failed to create presigned URL due to an internal server error.",
+      details: err.message,
+      errorName: err.name,
+    });
   }
 });
 
