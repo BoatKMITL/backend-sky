@@ -7,12 +7,27 @@ const app = express();
 const CryptoJS = require("crypto-js");
 app.use(cors());
 
+
+require("dotenv").config();
+const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
+const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
+
+const s3 = new S3Client({
+  region: process.env.AWS_REGION,
+  credentials: {
+    accessKeyId:     process.env.AWS_ACCESS_KEY,
+    secretAccessKey: process.env.AWS_SECRET_KEY,
+  },
+});
+
 /* ===== AES key (ควรเก็บใน .env) ===== */
 const EMP_KEY = process.env.EMP_ID_KEY || "sky45678you"; // ย้ายไป .env ภายหลังได้
 
 function decryptEmpId(enc) {
   try {
-    const encrypted = enc.replace(/-/g, "+").replace(/_/g, "/")+ "=".repeat((4 - enc.length % 4) % 4);
+    const encrypted =
+      enc.replace(/-/g, "+").replace(/_/g, "/") +
+      "=".repeat((4 - (enc.length % 4)) % 4);
     const bytes = CryptoJS.AES.decrypt(encrypted, EMP_KEY);
     const plain = bytes.toString(CryptoJS.enc.Utf8);
     return plain || null;
@@ -177,7 +192,9 @@ app.post("/logout", (req, res) => {
 // Home-------------------------------------------------------------------------------------------------------------------
 app.get("/allcustomers", async (req, res) => {
   try {
-    const rows = await q("SELECT c.*, COUNT( CASE WHEN NOT EXISTS ( SELECT 1 FROM items AS i WHERE i.tracking_number = p.tracking_number GROUP BY i.tracking_number HAVING MIN(i.item_status) = 1 AND MAX(i.item_status) = 1 ) THEN p.tracking_number END ) AS package_count FROM customers AS c LEFT JOIN packages AS p ON c.customer_id = p.customer_id GROUP BY c.customer_id ORDER BY c.customer_date DESC;");
+    const rows = await q(
+      "SELECT c.*, COUNT( CASE WHEN NOT EXISTS ( SELECT 1 FROM items AS i WHERE i.tracking_number = p.tracking_number GROUP BY i.tracking_number HAVING MIN(i.item_status) = 1 AND MAX(i.item_status) = 1 ) THEN p.tracking_number END ) AS package_count FROM customers AS c LEFT JOIN packages AS p ON c.customer_id = p.customer_id GROUP BY c.customer_id ORDER BY c.customer_date DESC;"
+    );
     return res.json(rows);
   } catch (err) {
     console.error("Error fetching all customers:", err.message);
@@ -1571,7 +1588,8 @@ app.post("/editpriority", (req, res) => {
 // appointment-------------------------------------------------------------------------------------------------------------------
 
 app.get("/appointment", (req, res) => {
-  const query = "SELECT *, DATE_FORMAT(start_date, '%Y-%m-%d') AS formatted_start_date FROM appointment WHERE status = 'Pending' AND start_date > CURDATE() - INTERVAL 1 DAY;";
+  const query =
+    "SELECT *, DATE_FORMAT(start_date, '%Y-%m-%d') AS formatted_start_date FROM appointment WHERE status = 'Pending' AND start_date > CURDATE() - INTERVAL 1 DAY;";
   db.query(query, (err, results) => {
     if (err) {
       console.error("Error fetching data:", err.message);
@@ -1789,7 +1807,10 @@ app.get("/company_info", (req, res) => {
       const row = firstRowOr404(res, results);
       if (!row) return;
 
-      const dirPath = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, row.company_name);
+      const dirPath = path.join(
+        process.env.RAILWAY_VOLUME_MOUNT_PATH,
+        row.company_name
+      );
       const filePath = path.join(dirPath, "company_info.json");
 
       try {
@@ -1829,7 +1850,11 @@ app.get("/dropdown", (req, res) => {
     }
 
     const companyName = results[0].company_name; // ปลอดภัยแล้ว
-    const filePath = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, companyName, "dropdown.json");
+    const filePath = path.join(
+      process.env.RAILWAY_VOLUME_MOUNT_PATH,
+      companyName,
+      "dropdown.json"
+    );
     const dirPath = path.dirname(filePath);
     // สร้างโฟลเดอร์ถ้ายังไม่มี
     if (!fs.existsSync(dirPath)) {
@@ -1878,7 +1903,7 @@ app.post("/editdropdown", (req, res) => {
       res.status(500).json({ error: "Failed to fetch data" });
     } else {
       const file = `${results[0].company_name}/dropdown.json`;
-      const filePath  = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, file);
+      const filePath = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, file);
       const dirPath = path.dirname(filePath);
       if (!fs.existsSync(dirPath)) {
         fs.mkdirSync(dirPath, { recursive: true });
@@ -1910,7 +1935,10 @@ app.get("/price", (req, res) => {
       const row = firstRowOr404(res, results);
       if (!row) return; // จบงานถ้าไม่เจอพนักงาน
 
-      const dirPath = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, row.company_name);
+      const dirPath = path.join(
+        process.env.RAILWAY_VOLUME_MOUNT_PATH,
+        row.company_name
+      );
       const filePath = path.join(dirPath, "price.json");
 
       if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
@@ -1939,7 +1967,7 @@ app.post("/editprice", (req, res) => {
       res.status(500).json({ error: "Failed to fetch data" });
     } else {
       const file = `${results[0].company_name}/price.json`;
-      const filePath  = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, file);
+      const filePath = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, file);
       const dirPath = path.dirname(filePath);
       if (!fs.existsSync(dirPath)) {
         fs.mkdirSync(dirPath, { recursive: true });
@@ -1970,7 +1998,10 @@ app.get("/promotion", (req, res) => {
       const row = firstRowOr404(res, results);
       if (!row) return;
 
-      const dirPath = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, row.company_name);
+      const dirPath = path.join(
+        process.env.RAILWAY_VOLUME_MOUNT_PATH,
+        row.company_name
+      );
       const filePath = path.join(dirPath, "promotion.json");
 
       if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
@@ -1999,7 +2030,7 @@ app.post("/editpromotion", (req, res) => {
       res.status(500).json({ error: "Failed to fetch data" });
     } else {
       const file = `${results[0].company_name}/promotion.json`;
-      const filePath  = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, file);
+      const filePath = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, file);
       const dirPath = path.dirname(filePath);
       if (!fs.existsSync(dirPath)) {
         fs.mkdirSync(dirPath, { recursive: true });
@@ -2031,7 +2062,10 @@ app.get("/warehouse", (req, res) => {
       const row = firstRowOr404(res, results);
       if (!row) return;
 
-      const dirPath = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, row.company_name);
+      const dirPath = path.join(
+        process.env.RAILWAY_VOLUME_MOUNT_PATH,
+        row.company_name
+      );
       const filePath = path.join(dirPath, "warehouse.json");
 
       if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
@@ -2060,7 +2094,7 @@ app.post("/editwarehoussetting", (req, res) => {
       res.status(500).json({ error: "Failed to fetch data" });
     } else {
       const file = `${results[0].company_name}/warehouse.json`;
-      const filePath  = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, file);
+      const filePath = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, file);
       const dirPath = path.dirname(filePath);
       if (!fs.existsSync(dirPath)) {
         fs.mkdirSync(dirPath, { recursive: true });
@@ -2195,7 +2229,7 @@ app.post("/editcompany_info", (req, res) => {
       res.status(500).json({ error: "Failed to fetch data" });
     } else {
       const file = `${results[0].company_name}/company_info.json`;
-      const filePath  = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, file);
+      const filePath = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, file);
       const dirPath = path.dirname(filePath);
       if (!fs.existsSync(dirPath)) {
         fs.mkdirSync(dirPath, { recursive: true });
@@ -2219,7 +2253,11 @@ const multer = require("multer");
 
 const imageStorage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadDir = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads", "img"); // Ensure the folder path for images
+    const uploadDir = path.join(
+      process.env.RAILWAY_VOLUME_MOUNT_PATH,
+      "uploads",
+      "img"
+    ); // Ensure the folder path for images
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true }); // Create directory if it doesn't exist
     }
@@ -2292,7 +2330,11 @@ app.post("/uploadItemImage", uploadImage.single("itemImage"), (req, res) => {
         .json({ success: false, message: "No file uploaded" });
     }
 
-    const uploadDir = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads", "img");
+    const uploadDir = path.join(
+      process.env.RAILWAY_VOLUME_MOUNT_PATH,
+      "uploads",
+      "img"
+    );
     const newFilePath = path.join(uploadDir, fileName);
 
     // Rename the file to the desired format
@@ -2326,32 +2368,65 @@ app.post("/uploadSlip", uploadImage.single("slip"), (req, res) => {
   }
 });
 
-app.post("/uploadVerifyImg", uploadImage.single("verifyImg"), (req, res) => {
-  try {
-    const file = req.file;
-    if (!file) {
-      return res
-        .status(400)
-        .json({ success: false, message: "No file uploaded" });
-    }
+// app.post("/uploadVerifyImg", uploadImage.single("verifyImg"), (req, res) => {
+//   try {
+//     const file = req.file;
+//     if (!file) {
+//       return res
+//         .status(400)
+//         .json({ success: false, message: "No file uploaded" });
+//     }
 
-    res.status(200).json({
-      success: true,
-      message: "File uploaded successfully",
-      filePath: file.filename,
+//     res.status(200).json({
+//       success: true,
+//       message: "File uploaded successfully",
+//       filePath: file.filename,
+//     });
+//   } catch (error) {
+//     console.error("Error uploading verify image:", error.message);
+//     res.status(500).json({ success: false, message: "Internal server error" });
+//   }
+// });
+
+app.get("/uploadVerifyImg", async (req, res) => {
+  try {
+    const { fileName, contentType = "image/jpeg" } = req.query;
+    if (!fileName)
+      return res.status(400).json({ error: "fileName is required" });
+
+    // path เต็มภายใน bucket
+    const key = `${process.env.AWS_S3_PREFIX}/${fileName}`;
+
+    const command = new PutObjectCommand({
+      Bucket: process.env.AWS_BUCKET,
+      Key: key,
+      ContentType: contentType,
+      ACL: "private",           // หรือ "public-read" ถ้าต้องการเปิดตรง ๆ
     });
-  } catch (error) {
-    console.error("Error uploading verify image:", error.message);
-    res.status(500).json({ success: false, message: "Internal server error" });
+
+    // presigned URL อายุ 15 นาที
+    const presignedUrl = await getSignedUrl(s3, command, { expiresIn: 900 });
+
+    /* publicUrl = URL ถาวร หากเปิด object public  */
+    const publicUrl = `https://${process.env.AWS_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
+
+    return res.json({ presignedUrl, publicUrl });
+  } catch (e) {
+    console.error("presign error:", e);
+    res.status(500).json({ error: "Failed to create presigned URL" });
   }
 });
 
 app.post("/deleteLogoImages", (req, res) => {
   try {
     // Define the directory where the images are stored
-    const directoryPath = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads", "img"); // Replace "uploads" with your directory
+    const directoryPath = path.join(
+      process.env.RAILWAY_VOLUME_MOUNT_PATH,
+      "uploads",
+      "img"
+    ); // Replace "uploads" with your directory
     if (fs.existsSync(directoryPath)) {
-    // Read all files in the directory
+      // Read all files in the directory
       fs.readdir(directoryPath, (err, files) => {
         if (err) {
           console.error("Error reading directory:", err);
@@ -2394,7 +2469,11 @@ app.post("/deletePackageImages", (req, res) => {
   try {
     // Define the directory where the images are stored
     const { photo_url } = req.body;
-    const directoryPath = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads", "img"); // Replace "uploads" with your directory
+    const directoryPath = path.join(
+      process.env.RAILWAY_VOLUME_MOUNT_PATH,
+      "uploads",
+      "img"
+    ); // Replace "uploads" with your directory
     // Read all files in the directory
 
     fs.readdir(directoryPath, (err, files) => {
@@ -2433,7 +2512,11 @@ app.post("/deleteImagesByName", (req, res) => {
   try {
     const { photo_url } = req.body; // Expecting an array of filenames from the client
     // Define the directory where the images are stored
-    const directoryPath = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads", "img"); // Replace with your directory
+    const directoryPath = path.join(
+      process.env.RAILWAY_VOLUME_MOUNT_PATH,
+      "uploads",
+      "img"
+    ); // Replace with your directory
     // Iterate through the provided filenames and delete them
     if (photo_url !== undefined) {
       const filePath = path.join(directoryPath, photo_url);
@@ -2460,12 +2543,21 @@ app.post("/deleteImagesByName", (req, res) => {
 });
 //--------------------------------------------------- DOCUMENT UPLOAD ---------------------------------------------------
 
-app.use("/uploads/img", express.static(path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads", "img")));
+app.use(
+  "/uploads/img",
+  express.static(
+    path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads", "img")
+  )
+);
 
 // Enhanced storage configuration
 const documentStorage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadDir = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads", "doc");
+    const uploadDir = path.join(
+      process.env.RAILWAY_VOLUME_MOUNT_PATH,
+      "uploads",
+      "doc"
+    );
     if (!fs.existsSync(uploadDir)) {
       fs.mkdirSync(uploadDir, { recursive: true });
     }
@@ -2492,13 +2584,22 @@ app.post("/uploadDocument", uploadDocument.single("document"), (req, res) => {
     }
 
     // Failsafe: Check directory existence after upload
-    const uploadDir = path.resolve(process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads", "doc");
+    const uploadDir = path.resolve(
+      process.env.RAILWAY_VOLUME_MOUNT_PATH,
+      "uploads",
+      "doc"
+    );
     if (!fs.existsSync(uploadDir)) {
       console.error("Upload directory missing after upload:", uploadDir);
       throw new Error("Upload directory vanished unexpectedly.");
     }
 
-    const savedPath = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads", "doc", file.originalname);
+    const savedPath = path.join(
+      process.env.RAILWAY_VOLUME_MOUNT_PATH,
+      "uploads",
+      "doc",
+      file.originalname
+    );
     console.log("File saved successfully at:", savedPath);
 
     res.status(200).json({
