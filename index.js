@@ -2373,36 +2373,35 @@ app.post("/uploadSlip", uploadImage.single("slip"), (req, res) => {
 });
 
 // ── New /uploadVerifyImg endpoint ───────────────────────────────────────────
-// Updated /uploadVerifyImg endpoint to use emp_database as folder name
-// Updated /uploadVerifyImg endpoint to respect emp_id_raw from middleware
+// Updated /uploadVerifyImg endpoint: logs full errors for easier debugging
 app.post(
   "/uploadVerifyImg",
   uploadMemory.single("verifyImg"),
   async (req, res) => {
+    // 1) Ensure file present
     if (!req.file) {
       return res.status(400).json({ error: "No file uploaded. Ensure field name is 'verifyImg'." });
     }
 
     const { originalname, buffer } = req.file;
-    // The middleware decrypts req.query.emp_id into plain, and stores original encrypted in emp_id_raw
+    // 2) Determine encrypted vs. decrypted emp_id
     const encryptedEmpId = req.query.emp_id_raw || req.query.emp_id;
     let decryptedEmpId;
 
     if (req.query.emp_id_raw) {
-      // decrypt original encrypted
       decryptedEmpId = decryptEmpId(encryptedEmpId);
       if (!decryptedEmpId) {
         return res.status(400).json({ error: "Invalid emp_id provided" });
       }
     } else if (req.query.emp_id) {
-      // already plaintext per middleware
+      // Already decrypted by middleware
       decryptedEmpId = req.query.emp_id;
     } else {
       return res.status(400).json({ error: "emp_id is required" });
     }
 
     try {
-      // Fetch emp_database for S3 folder
+      // 3) Lookup emp_database to form S3 folder
       const rows = await new Promise((resolve, reject) => {
         companydb.query(
           "SELECT emp_database FROM employee WHERE emp_id = ?",
@@ -2416,27 +2415,28 @@ app.post(
       }
       const companyFolder = rows[0].emp_database;
 
-      // Convert image buffer to webp
+      // 4) Convert to WebP
       const webpBuffer = await sharp(buffer).webp({ quality: 80 }).toBuffer();
 
-      // Construct S3 key under emp_database folder
+      // 5) Generate S3 key
       const baseName = path.basename(originalname, path.extname(originalname));
       const prefix = process.env.AWS_S3_PREFIX || "uploads";
       const s3Key = `${companyFolder}/${prefix}/${baseName}.webp`;
 
-      // Generate presigned URL and public URL
+      // 6) Create presigned PUT URL
       const putCommand = new PutObjectCommand({
         Bucket: process.env.AWS_BUCKET,
         Key: s3Key,
-        ContentType: "image/webp"
+        ContentType: "image/webp",
       });
       const presignedUrl = await getSignedUrl(s3, putCommand, { expiresIn: 900 });
       const publicUrl = `https://${process.env.AWS_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/${s3Key}`;
 
-      res.json({ presignedUrl, publicUrl });
+      return res.json({ presignedUrl, publicUrl });
     } catch (err) {
       console.error("Error in /uploadVerifyImg:", err);
-      res.status(500).json({ error: "Internal server error" });
+      // Send full error message back for debugging
+      return res.status(500).json({ error: err.message || "Internal server error" });
     }
   }
 );
