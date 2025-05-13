@@ -1700,99 +1700,161 @@ app.get("/gentrack", (req, res) => {
 });
 
 // User-------------------------------------------------------------------------------------------------------------------
-app.post("/editsendaddr", (req, res) => {
-  const customer_id = req.body.customer_id;
-  const customer_name = req.body.customer_name;
-  const address = req.body.address;
-  const city = req.body.city;
-  const state = req.body.state;
-  const country = req.body.country;
-  const zipcode = req.body.zipcode;
-  const phone = req.body.phone;
-  const doc_type = req.body.doc_type;
-  const doc_url = req.body.doc_url;
-  if (req.body.emp_id !== undefined) {
-    const emp_id = req.body.emp_id;
-    const querydb = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-    companydb.query(querydb, [emp_id], (err, results) => {
-      if (err) {
-        console.error("Error fetching data:", err.message);
-        res.status(500).json({ error: "Failed to fetch data" });
-      } else {
-        const newDatabase = results[0].emp_database; // Example of dynamic DB
-        const newUser = results[0].emp_database; // Example of dynamic user
-        const newPassword = results[0].emp_datapass; // Example of dynamic password
-        db.changeUser(
-          {
-            user: newUser,
-            password: newPassword,
-            database: newDatabase,
-          },
-          (changeErr) => {
-            if (changeErr) {
-              console.error("Error changing database:", changeErr.message);
-              return res
-                .status(500)
-                .json({ error: "Failed to switch database" });
-            }
-            res.json(results);
-          }
-        );
-      }
-    });
+// app.post("/editsendaddr", (req, res) => {
+//   const customer_id = req.body.customer_id;
+//   const customer_name = req.body.customer_name;
+//   const address = req.body.address;
+//   const city = req.body.city;
+//   const state = req.body.state;
+//   const country = req.body.country;
+//   const zipcode = req.body.zipcode;
+//   const phone = req.body.phone;
+//   const doc_type = req.body.doc_type;
+//   const doc_url = req.body.doc_url;
+//   if (req.body.emp_id !== undefined) {
+//     const emp_id = req.body.emp_id;
+//     const querydb = "SELECT * FROM employee WHERE emp_id = ?";
+//     companydb.query(querydb, [emp_id], (err, results) => {
+//       if (err) {
+//         console.error("Error fetching data:", err.message);
+//         res.status(500).json({ error: "Failed to fetch data" });
+//       } else {
+//         const newDatabase = results[0].emp_database; // Example of dynamic DB
+//         const newUser = results[0].emp_database; // Example of dynamic user
+//         const newPassword = results[0].emp_datapass; // Example of dynamic password
+//         db.changeUser(
+//           {
+//             user: newUser,
+//             password: newPassword,
+//             database: newDatabase,
+//           },
+//           (changeErr) => {
+//             if (changeErr) {
+//               console.error("Error changing database:", changeErr.message);
+//               return res
+//                 .status(500)
+//                 .json({ error: "Failed to switch database" });
+//             }
+//             res.json(results);
+//           }
+//         );
+//       }
+//     });
+//   }
+//   if (req.body.doc_url !== undefined) {
+//     const query1 =
+//       "UPDATE customers SET customer_name = ?, address = ?, city = ?, state = ?, country = ?, zipcode = ?, phone = ?, doc_type = ?, doc_url = ? WHERE customers.customer_id = ?;";
+//     db.query(
+//       query1,
+//       [
+//         customer_name,
+//         address,
+//         city,
+//         state,
+//         country,
+//         zipcode,
+//         phone,
+//         doc_type,
+//         doc_url,
+//         customer_id,
+//       ],
+//       (err, results) => {
+//         if (err) {
+//           console.error("Error fetching data:", err.message);
+//           res.status(500).json({ error: "Failed to fetch data" });
+//         } else {
+//           res.send("Values Edited");
+//         }
+//       }
+//     );
+//   } else {
+//     const query1 =
+//       "UPDATE customers SET customer_name = ?, address = ?, city = ?, state = ?, country = ?, zipcode = ?, phone = ? WHERE customers.customer_id = ?;";
+//     db.query(
+//       query1,
+//       [
+//         customer_name,
+//         address,
+//         city,
+//         state,
+//         country,
+//         zipcode,
+//         phone,
+//         customer_id,
+//       ],
+//       (err, results) => {
+//         if (err) {
+//           console.error("Error fetching data:", err.message);
+//           res.status(500).json({ error: "Failed to fetch data" });
+//         } else {
+//           res.send("Values Edited");
+//         }
+//       }
+//     );
+//   }
+// });
+
+// แก้ไข /editsendaddr ให้สลับ DB ก่อน แล้วรัน UPDATE ทีเดียว ตอบกลับแค่ครั้งเดียว
+
+app.post("/editsendaddr", async (req, res) => {
+  const {
+    customer_id,
+    customer_name,
+    address,
+    city,
+    state,
+    country = "Thailand",
+    zipcode,
+    phone,
+    doc_type,
+    doc_url,
+    emp_id,
+  } = req.body;
+
+  if (!emp_id) {
+    return res.status(400).json({ error: "emp_id is required" });
   }
-  if (req.body.doc_url !== undefined) {
-    const query1 =
-      "UPDATE `customers` SET `customer_name` = ?, `address` = ?, `city` = ?, `state` = ?, `country` = ?, `zipcode` = ?, `phone` = ?, `doc_type` = ?, `doc_url` = ? WHERE `customers`.`customer_id` = ?;";
-    db.query(
-      query1,
-      [
-        customer_name,
-        address,
-        city,
-        state,
-        country,
-        zipcode,
-        phone,
-        doc_type,
-        doc_url,
-        customer_id,
-      ],
-      (err, results) => {
-        if (err) {
-          console.error("Error fetching data:", err.message);
-          res.status(500).json({ error: "Failed to fetch data" });
-        } else {
-          res.send("Values Edited");
-        }
-      }
-    );
-  } else {
-    const query1 =
-      "UPDATE `customers` SET `customer_name` = ?, `address` = ?, `city` = ?, `state` = ?, `country` = ?, `zipcode` = ?, `phone` = ? WHERE `customers`.`customer_id` = ?;";
-    db.query(
-      query1,
-      [
-        customer_name,
-        address,
-        city,
-        state,
-        country,
-        zipcode,
-        phone,
-        customer_id,
-      ],
-      (err, results) => {
-        if (err) {
-          console.error("Error fetching data:", err.message);
-          res.status(500).json({ error: "Failed to fetch data" });
-        } else {
-          res.send("Values Edited");
-        }
-      }
-    );
+
+  try {
+    // 1) สลับไปใช้ฐานข้อมูลของบริษัทผ่าน middleware/helper
+    await switchToEmployeeDB(emp_id);
+
+    // 2) สร้าง SQL และ params เบื้องต้น
+    let sql =
+      "UPDATE customers SET customer_name = ?, address = ?, city = ?, state = ?, country = ?, zipcode = ?, phone = ?";
+    const params = [
+      customer_name,
+      address,
+      city,
+      state,
+      country,
+      zipcode,
+      phone,
+    ];
+
+    // 3) ถ้ามี doc_type + doc_url ให้เพิ่มเข้า SQL
+    if (doc_type !== undefined && doc_url !== undefined) {
+      sql += ", doc_type = ?, doc_url = ?";
+      params.push(doc_type, doc_url);
+    }
+
+    // 4) เติม WHERE และ customer_id
+    sql += " WHERE customer_id = ?";
+    params.push(customer_id);
+
+    // 5) รันคำสั่ง UPDATE
+    await q(sql, params);
+
+    // 6) ตอบกลับผลสำเร็จ
+    return res.json({ success: true, message: "Customer address updated" });
+  } catch (err) {
+    console.error("Error in /editsendaddr:", err);
+    return res
+      .status(500)
+      .json({ error: err.message || "Internal server error" });
   }
 });
+
 
 // Setting-------------------------------------------------------------------------------------------------------------------
 app.get("/company_info", (req, res) => {
@@ -2373,6 +2435,7 @@ app.post("/uploadSlip", uploadImage.single("slip"), (req, res) => {
 });
 
 // ── New /uploadVerifyImg endpoint ───────────────────────────────────────────
+// Updated /uploadVerifyImg endpoint: logs full errors for easier debugging
 app.post(
   "/uploadVerifyImg",
   uploadMemory.single("verifyImg"),
