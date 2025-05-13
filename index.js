@@ -11,9 +11,8 @@ const multer = require("multer");
 const uploadMemory = multer({ storage: multer.memoryStorage() });
 const sharp = require("sharp");
 
-
 require("dotenv").config();
-process.env.AWS_S3_DISABLE_CHECKSUMS = "true";   // ปิด CRC32 placeholder
+process.env.AWS_S3_DISABLE_CHECKSUMS = "true"; // ปิด CRC32 placeholder
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
 const s3 = new S3Client({
@@ -2251,7 +2250,7 @@ app.post("/editcompany_info", (req, res) => {
 
 //-------------------------------------------Local Management------------------------------------------
 
-const multer = require("multer");
+// const multer = require("multer");
 
 //--------------------------------------------------- IMAGE UPLOAD ---------------------------------------------------
 
@@ -2372,7 +2371,7 @@ app.post("/uploadSlip", uploadImage.single("slip"), (req, res) => {
   }
 });
 
-
+// ── New /uploadVerifyImg endpoint ───────────────────────────────────────────
 app.post(
   "/uploadVerifyImg",
   uploadMemory.single("verifyImg"),
@@ -2384,7 +2383,7 @@ app.post(
         return res.status(400).json({ error: "fileName and emp_id required" });
       }
 
-      // 1) ถอดชื่อบริษัทจาก DB
+      // 1) หา company_name จาก emp_id
       const [row] = await new Promise((resolve, reject) => {
         companydb.query(
           "SELECT company_name FROM employee WHERE emp_id = ?",
@@ -2392,21 +2391,15 @@ app.post(
           (err, results) => (err ? reject(err) : resolve(results))
         );
       });
-      if (!row) {
-        return res.status(404).json({ error: "Employee not found" });
-      }
-      const company = row.company_name; // ex: "pauseexpress"
+      if (!row) return res.status(404).json({ error: "Employee not found" });
+      const company = row.company_name; // e.g. "pauseexpress"
 
-      // 2) แปลง buffer เป็น WebP
-      const webpBuffer = await sharp(buffer)
-        .webp({ quality: 80 })
-        .toBuffer();
+      // 2) แปลงเป็น WebP
+      const webpBuffer = await sharp(buffer).webp({ quality: 80 }).toBuffer();
 
-      // 3) สร้าง key ให้ลงท้าย .webp
-      const baseName = path.basename(originalname, path.extname(originalname));
-      const fileNameWebp = `${baseName}.webp`;
-      const prefix = process.env.AWS_S3_PREFIX; // e.g. "VerifyImg"
-      const key = `${company}/${prefix}/${fileNameWebp}`;
+      // 3) สร้าง S3 key
+      const base = path.basename(originalname, path.extname(originalname));
+      const key = `${company}/${process.env.AWS_S3_PREFIX}/${base}.webp`;
 
       // 4) เตรียมคำสั่งอัพโหลด
       const command = new PutObjectCommand({
@@ -2427,7 +2420,6 @@ app.post(
     }
   }
 );
-
 
 app.post("/deleteLogoImages", (req, res) => {
   try {
