@@ -16,7 +16,6 @@ process.env.AWS_S3_DISABLE_CHECKSUMS = "true"; // ปิด CRC32 placeholder
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
 
-
 const s3 = new S3Client({
   region: process.env.AWS_REGION,
   credentials: {
@@ -2374,51 +2373,119 @@ app.post("/uploadSlip", uploadImage.single("slip"), (req, res) => {
 });
 
 // ── New /uploadVerifyImg endpoint ───────────────────────────────────────────
+// THEN, your route definitions, including the modified /uploadVerifyImg
 app.post(
   "/uploadVerifyImg",
   uploadMemory.single("verifyImg"),
   async (req, res) => {
-    try {
-      const { originalname, buffer } = req.file;
-      const { emp_id } = req.query;
-      if (!originalname || !emp_id) {
-        return res.status(400).json({ error: "fileName and emp_id required" });
-      }
+    // ... (the robust /uploadVerifyImg function code from the previous answer)
+    console.log("--- /uploadVerifyImg Request ---");
+    console.log("Headers:", JSON.stringify(req.headers, null, 2));
+    console.log("Query:", JSON.stringify(req.query, null, 2));
+    console.log("Body (if any):", JSON.stringify(req.body, null, 2));
+    console.log(
+      "req.file (from multer):",
+      req.file ? "File found" : "No file found by multer"
+    );
+    console.log("------------------------------");
 
-      // 1) หา company_name จาก emp_id
-      const [row] = await new Promise((resolve, reject) => {
+    if (!req.file) {
+      let errorMessage =
+        "No file uploaded. Ensure the request Content-Type is 'multipart/form-data' and the file is sent under the field name 'verifyImg'.";
+      if (
+        req.headers["content-type"] &&
+        !req.headers["content-type"].startsWith("multipart/form-data")
+      ) {
+        errorMessage = `Incorrect Content-Type: '${req.headers["content-type"]}'. Expected 'multipart/form-data'. File must be sent under field name 'verifyImg'.`;
+      }
+      console.error(
+        "Error in /uploadVerifyImg: No file found by multer.",
+        errorMessage
+      );
+      return res.status(400).json({ error: errorMessage });
+    }
+
+    const { originalname, buffer } = req.file;
+    const { emp_id: encryptedEmpIdFromQuery } = req.query;
+
+    if (!encryptedEmpIdFromQuery) {
+      console.error(
+        "Error in /uploadVerifyImg: emp_id is missing from query parameters."
+      );
+      return res
+        .status(400)
+        .json({ error: "emp_id (encrypted) is required in query parameters." });
+    }
+
+    const decrypted_emp_id = decryptEmpId(encryptedEmpIdFromQuery);
+    if (!decrypted_emp_id) {
+      console.error(
+        "Error in /uploadVerifyImg: Failed to decrypt emp_id or invalid format.",
+        encryptedEmpIdFromQuery
+      );
+      return res
+        .status(400)
+        .json({ error: "Invalid or undecryptable emp_id provided in query." });
+    }
+
+    try {
+      const rows = await new Promise((resolve, reject) => {
         companydb.query(
           "SELECT company_name FROM employee WHERE emp_id = ?",
-          [decryptEmpId(emp_id)],
-          (err, results) => (err ? reject(err) : resolve(results))
+          [decrypted_emp_id],
+          (err, results) => {
+            if (err) return reject(err);
+            resolve(results);
+          }
         );
       });
-      if (!row) return res.status(404).json({ error: "Employee not found" });
-      const company = row.company_name; // e.g. "pauseexpress"
 
-      // 2) แปลงเป็น WebP
+      if (!rows || rows.length === 0) {
+        console.error(
+          "Error in /uploadVerifyImg: Employee not found for decrypted emp_id:",
+          decrypted_emp_id
+        );
+        return res
+          .status(404)
+          .json({ error: "Employee not found for the given emp_id." });
+      }
+      const company = rows[0].company_name;
+
+      if (!buffer || buffer.length === 0) {
+        console.error("Error in /uploadVerifyImg: File buffer is empty.");
+        return res
+          .status(400)
+          .json({ error: "Uploaded file buffer is empty." });
+      }
       const webpBuffer = await sharp(buffer).webp({ quality: 80 }).toBuffer();
 
-      // 3) สร้าง S3 key
-      const base = path.basename(originalname, path.extname(originalname));
-      const key = `${company}/${process.env.AWS_S3_PREFIX}/${base}.webp`;
+      const baseNameWithoutExt = path.basename(
+        originalname,
+        path.extname(originalname)
+      );
+      const s3Key = `${company}/${
+        process.env.AWS_S3_PREFIX || "uploads"
+      }/${baseNameWithoutExt}.webp`;
 
-      // 4) เตรียมคำสั่งอัพโหลด
-      const command = new PutObjectCommand({
+      const putCommand = new PutObjectCommand({
         Bucket: process.env.AWS_BUCKET,
-        Key: key,
-        Body: webpBuffer,
+        Key: s3Key,
         ContentType: "image/webp",
       });
 
-      // 5) สร้าง presigned URL
-      const presignedUrl = await getSignedUrl(s3, command, { expiresIn: 900 });
-      const publicUrl = `https://${process.env.AWS_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
+      const presignedPutUrl = await getSignedUrl(s3, putCommand, {
+        expiresIn: 900,
+      });
+      const publicS3Url = `https://${process.env.AWS_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/${s3Key}`;
 
-      res.json({ presignedUrl, publicUrl });
+      console.log("Successfully generated presigned URL for:", s3Key);
+      res.json({ presignedUrl: presignedPutUrl, publicUrl: publicS3Url });
     } catch (err) {
-      console.error("Error in /uploadVerifyImg:", err);
-      res.status(500).json({ error: "Failed to upload image" });
+      console.error("Critical error in /uploadVerifyImg:", err.stack || err);
+      let userMessage =
+        "Failed to process image upload due to an internal server error.";
+      // ... (more specific error message logic if desired)
+      res.status(500).json({ error: userMessage });
     }
   }
 );
