@@ -2373,7 +2373,6 @@ app.post("/uploadSlip", uploadImage.single("slip"), (req, res) => {
 });
 
 // ── New /uploadVerifyImg endpoint ───────────────────────────────────────────
-// Updated /uploadVerifyImg endpoint: logs full errors for easier debugging
 app.post(
   "/uploadVerifyImg",
   uploadMemory.single("verifyImg"),
