@@ -2374,6 +2374,7 @@ app.post("/uploadSlip", uploadImage.single("slip"), (req, res) => {
 
 // ── New /uploadVerifyImg endpoint ───────────────────────────────────────────
 // Updated /uploadVerifyImg endpoint to use emp_database as folder name
+// Updated /uploadVerifyImg endpoint to respect emp_id_raw from middleware
 app.post(
   "/uploadVerifyImg",
   uploadMemory.single("verifyImg"),
@@ -2383,18 +2384,25 @@ app.post(
     }
 
     const { originalname, buffer } = req.file;
-    const { emp_id: encryptedEmpId } = req.query;
-    if (!encryptedEmpId) {
-      return res.status(400).json({ error: "emp_id (encrypted) is required" });
-    }
+    // The middleware decrypts req.query.emp_id into plain, and stores original encrypted in emp_id_raw
+    const encryptedEmpId = req.query.emp_id_raw || req.query.emp_id;
+    let decryptedEmpId;
 
-    const decryptedEmpId = decryptEmpId(encryptedEmpId);
-    if (!decryptedEmpId) {
-      return res.status(400).json({ error: "Invalid emp_id provided" });
+    if (req.query.emp_id_raw) {
+      // decrypt original encrypted
+      decryptedEmpId = decryptEmpId(encryptedEmpId);
+      if (!decryptedEmpId) {
+        return res.status(400).json({ error: "Invalid emp_id provided" });
+      }
+    } else if (req.query.emp_id) {
+      // already plaintext per middleware
+      decryptedEmpId = req.query.emp_id;
+    } else {
+      return res.status(400).json({ error: "emp_id is required" });
     }
 
     try {
-      // Fetch emp_database instead of company_name
+      // Fetch emp_database for S3 folder
       const rows = await new Promise((resolve, reject) => {
         companydb.query(
           "SELECT emp_database FROM employee WHERE emp_id = ?",
@@ -2411,16 +2419,16 @@ app.post(
       // Convert image buffer to webp
       const webpBuffer = await sharp(buffer).webp({ quality: 80 }).toBuffer();
 
-      // Generate S3 key with emp_database folder
+      // Construct S3 key under emp_database folder
       const baseName = path.basename(originalname, path.extname(originalname));
       const prefix = process.env.AWS_S3_PREFIX || "uploads";
       const s3Key = `${companyFolder}/${prefix}/${baseName}.webp`;
 
-      // Prepare S3 command & presigned URL
+      // Generate presigned URL and public URL
       const putCommand = new PutObjectCommand({
         Bucket: process.env.AWS_BUCKET,
         Key: s3Key,
-        ContentType: "image/webp",
+        ContentType: "image/webp"
       });
       const presignedUrl = await getSignedUrl(s3, putCommand, { expiresIn: 900 });
       const publicUrl = `https://${process.env.AWS_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/${s3Key}`;
@@ -2432,6 +2440,7 @@ app.post(
     }
   }
 );
+
 
 app.post("/deleteLogoImages", (req, res) => {
   try {
