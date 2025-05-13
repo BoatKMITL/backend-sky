@@ -9,9 +9,11 @@ app.use(cors());
 
 const multer = require("multer");
 const uploadMemory = multer({ storage: multer.memoryStorage() });
+const sharp = require("sharp");
+
 
 require("dotenv").config();
-process.env.AWS_S3_DISABLE_CHECKSUMS = "true"; // ปิด CRC32 placeholder
+process.env.AWS_S3_DISABLE_CHECKSUMS = "true";   // ปิด CRC32 placeholder
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
 const s3 = new S3Client({
@@ -2370,9 +2372,6 @@ app.post("/uploadSlip", uploadImage.single("slip"), (req, res) => {
   }
 });
 
-const sharp = require("sharp");
-const { PutObjectCommand } = require("@aws-sdk/client-s3");
-const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 
 app.post(
   "/uploadVerifyImg",
@@ -2385,27 +2384,31 @@ app.post(
         return res.status(400).json({ error: "fileName and emp_id required" });
       }
 
-      // 1) ถอดชื่อบริษัท
+      // 1) ถอดชื่อบริษัทจาก DB
       const [row] = await new Promise((resolve, reject) => {
         companydb.query(
           "SELECT company_name FROM employee WHERE emp_id = ?",
           [decryptEmpId(emp_id)],
-          (e, r) => (e ? reject(e) : resolve(r))
+          (err, results) => (err ? reject(err) : resolve(results))
         );
       });
-      if (!row) return res.status(404).json({ error: "Employee not found" });
-      const company = row.company_name;
+      if (!row) {
+        return res.status(404).json({ error: "Employee not found" });
+      }
+      const company = row.company_name; // ex: "pauseexpress"
 
-      // 2) สร้าง WebP buffer
-      const webpBuffer = await sharp(buffer).webp({ quality: 80 }).toBuffer();
+      // 2) แปลง buffer เป็น WebP
+      const webpBuffer = await sharp(buffer)
+        .webp({ quality: 80 })
+        .toBuffer();
 
-      // 3) ตั้ง key ให้ลงท้าย .webp
-      const prefix = process.env.AWS_S3_PREFIX || "VerifyImg";
-      const fileNameWebp =
-        path.basename(originalname, path.extname(originalname)) + ".webp";
+      // 3) สร้าง key ให้ลงท้าย .webp
+      const baseName = path.basename(originalname, path.extname(originalname));
+      const fileNameWebp = `${baseName}.webp`;
+      const prefix = process.env.AWS_S3_PREFIX; // e.g. "VerifyImg"
       const key = `${company}/${prefix}/${fileNameWebp}`;
 
-      // 4) สร้างคำสั่งอัพโหลด
+      // 4) เตรียมคำสั่งอัพโหลด
       const command = new PutObjectCommand({
         Bucket: process.env.AWS_BUCKET,
         Key: key,
@@ -2413,19 +2416,18 @@ app.post(
         ContentType: "image/webp",
       });
 
-      // 5) ทำ presign URL
-      const presignedUrl = await getSignedUrl(s3, command, {
-        expiresIn: 900,
-      });
+      // 5) สร้าง presigned URL
+      const presignedUrl = await getSignedUrl(s3, command, { expiresIn: 900 });
       const publicUrl = `https://${process.env.AWS_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
 
       res.json({ presignedUrl, publicUrl });
     } catch (err) {
-      console.error("Error:", err);
-      res.status(500).json({ error: "Upload失败" });
+      console.error("Error in /uploadVerifyImg:", err);
+      res.status(500).json({ error: "Failed to upload image" });
     }
   }
 );
+
 
 app.post("/deleteLogoImages", (req, res) => {
   try {
