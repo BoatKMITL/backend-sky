@@ -2435,49 +2435,51 @@ app.post(
         .json({ error: "No file uploaded (field 'itemImage')" });
     }
 
-    // ดึงไฟล์จาก memory
-    const { originalname, buffer } = req.file;
-
-    // ดึง emp_id (ถอดรหัสถ้ามี)
-    const enc = req.query.emp_id_raw || req.query.emp_id;
+    // ถอด emp_id ปกติ
+    const enc   = req.query.emp_id_raw || req.query.emp_id;
     const empId = req.query.emp_id_raw ? decryptEmpId(enc) : req.query.emp_id;
-    if (!empId) {
-      return res.status(400).json({ error: "Invalid or missing emp_id" });
-    }
+    if (!empId) return res.status(400).json({ error: "Invalid or missing emp_id" });
 
     try {
-      // หา emp_database จาก employee table
+      // หาชื่อโฟลเดอร์บริษัท
       const rows = await new Promise((resolve, reject) => {
         companydb.query(
           "SELECT emp_database FROM employee WHERE emp_id = ?",
           [empId],
-          (err, results) => (err ? reject(err) : resolve(results))
+          (err, results) => err ? reject(err) : resolve(results)
         );
       });
-      if (!rows.length) {
-        return res.status(404).json({ error: "Employee not found" });
-      }
+      if (!rows.length) return res.status(404).json({ error: "Employee not found" });
       const companyFolder = rows[0].emp_database;
 
-      // แปลงเป็น WebP
-      const webpBuffer = await sharp(buffer).webp({ quality: 80 }).toBuffer();
+      // แปลงไฟล์เป็น WebP
+      const webpBuffer = await sharp(req.file.buffer)
+        .webp({ quality: 80 })
+        .toBuffer();
 
-      // สร้าง S3 key
-      const baseName = path.basename(originalname, path.extname(originalname));
-      const timestamp = Date.now();
-      const key = `${companyFolder}/public/item/${baseName}_${timestamp}.webp`;
+      // อ่านชื่อไฟล์ใหม่จาก client หรือ fallback ไปใช้ชื่อเดิม + timestamp
+      const { fileName } = req.body; // จาก FormData
+      let key;
+      if (fileName) {
+        // ถ้า client ส่งชื่อมา ก็ใช้ key นี้เลย
+        key = `${companyFolder}/public/item/${fileName.replace(/\.[^/.]+$/, ".webp")}`;
+      } else {
+        // ถ้าไม่ส่ง มาสร้าง key เอง
+        const originalname = req.file.originalname;
+        const baseName = path.basename(originalname, path.extname(originalname));
+        const timestamp = Date.now();
+        key = `${companyFolder}/public/item/${baseName}_${timestamp}.webp`;
+      }
 
-      // เตรียมคำสั่ง PUT
+      // สร้าง presigned PUT URL
       const cmd = new PutObjectCommand({
         Bucket: process.env.AWS_BUCKET,
         Key: key,
         ContentType: "image/webp",
       });
-
-      // สร้าง presigned URL
       const presignedUrl = await getSignedUrl(s3, cmd, { expiresIn: 900 });
 
-      // สร้าง public URL ให้เก็บใน DB
+      // publicUrl สำหรับบันทึกใน DB
       const publicUrl = `https://${process.env.AWS_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
 
       return res.json({ presignedUrl, publicUrl });
@@ -2489,6 +2491,7 @@ app.post(
     }
   }
 );
+
 
 app.post("/uploadSlip", uploadImage.single("slip"), (req, res) => {
   try {
