@@ -2426,37 +2426,72 @@ app.post(
 
 
 
-app.post("/uploadItemImage", uploadImage.single("itemImage"), (req, res) => {
-  try {
-    const { fileName } = req.body; // Get the desired filename from the request body
-    const file = req.file;
-
-    if (!file) {
+app.post(
+  "/uploadItemImage",
+  uploadMemory.single("itemImage"),
+  async (req, res) => {
+    if (!req.file) {
       return res
         .status(400)
-        .json({ success: false, message: "No file uploaded" });
+        .json({ error: "No file uploaded (field 'itemImage')" });
     }
 
-    const uploadDir = path.join(
-      process.env.RAILWAY_VOLUME_MOUNT_PATH,
-      "uploads",
-      "img"
-    );
-    const newFilePath = path.join(uploadDir, fileName);
+    // ดึงไฟล์จาก memory
+    const { originalname, buffer } = req.file;
 
-    // Rename the file to the desired format
-    fs.renameSync(file.path, newFilePath);
+    // ดึง emp_id (ถอดรหัสถ้ามี)
+    const enc = req.query.emp_id_raw || req.query.emp_id;
+    const empId = req.query.emp_id_raw ? decryptEmpId(enc) : req.query.emp_id;
+    if (!empId) {
+      return res.status(400).json({ error: "Invalid or missing emp_id" });
+    }
 
-    res.status(200).json({
-      success: true,
-      message: "File uploaded successfully",
-      filePath: fileName,
-    });
-  } catch (error) {
-    console.error("Error handling file upload:", error.message);
-    res.status(500).json({ success: false, message: "Internal server error" });
+    try {
+      // หา emp_database จาก employee table
+      const rows = await new Promise((resolve, reject) => {
+        companydb.query(
+          "SELECT emp_database FROM employee WHERE emp_id = ?",
+          [empId],
+          (err, results) => (err ? reject(err) : resolve(results))
+        );
+      });
+      if (!rows.length) {
+        return res.status(404).json({ error: "Employee not found" });
+      }
+      const companyFolder = rows[0].emp_database;
+
+      // แปลงเป็น WebP
+      const webpBuffer = await sharp(buffer)
+        .webp({ quality: 80 })
+        .toBuffer();
+
+      // สร้าง S3 key
+      const baseName = path.basename(originalname, path.extname(originalname));
+      const timestamp = Date.now();
+      const key = `${companyFolder}/public/item/${baseName}_${timestamp}.webp`;
+
+      // เตรียมคำสั่ง PUT
+      const cmd = new PutObjectCommand({
+        Bucket: process.env.AWS_BUCKET,
+        Key: key,
+        ContentType: "image/webp",
+      });
+
+      // สร้าง presigned URL
+      const presignedUrl = await getSignedUrl(s3, cmd, { expiresIn: 900 });
+
+      // สร้าง public URL ให้เก็บใน DB
+      const publicUrl = `https://${process.env.AWS_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
+
+      return res.json({ presignedUrl, publicUrl });
+    } catch (err) {
+      console.error("Error in /uploadItemImage:", err);
+      return res
+        .status(500)
+        .json({ error: err.message || "Internal server error" });
+    }
   }
-});
+);
 
 app.post("/uploadSlip", uploadImage.single("slip"), (req, res) => {
   try {
