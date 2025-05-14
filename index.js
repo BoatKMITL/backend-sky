@@ -2360,30 +2360,55 @@ app.post("/uploadLogo", uploadImage.single("logo"), (req, res) => {
 
 app.post(
   "/uploadPackageImage",
-  uploadImage.single("packageImage"),
-  (req, res) => {
-    try {
-      const file = req.file;
-      if (!file) {
-        return res
-          .status(400)
-          .json({ success: false, message: "No file uploaded" });
-      }
+  uploadMemory.single("packageImage"),
+  async (req, res) => {
+    if (!req.file) {
+      return res.status(400).json({ error: "No file uploaded (field 'packageImage')" });
+    }
+    const { originalname, buffer } = req.file;
 
-      const filePath = file.filename;
-      res.status(200).json({
-        success: true,
-        message: "File uploaded successfully",
-        filePath,
+    // ดึง emp_id มาเหมือนเดิม...
+    const encrypted = req.query.emp_id_raw || req.query.emp_id;
+    const empId = req.query.emp_id_raw ? decryptEmpId(encrypted) : req.query.emp_id;
+    if (!empId) return res.status(400).json({ error: "Invalid or missing emp_id" });
+
+    try {
+      // lookup emp_database
+      const rows = await new Promise((resolve, reject) => {
+        companydb.query(
+          "SELECT emp_database FROM employee WHERE emp_id = ?",
+          [empId],
+          (err, results) => err ? reject(err) : resolve(results)
+        );
       });
-    } catch (error) {
-      console.error("Error handling file upload:", error.message);
-      res
-        .status(500)
-        .json({ success: false, message: "Internal server error" });
+      if (!rows.length) return res.status(404).json({ error: "Employee not found" });
+      const companyFolder = rows[0].emp_database;
+
+      // แปลงเป็น WebP ถ้าต้องการ
+      const uploadBuffer = await sharp(buffer).webp({ quality: 80 }).toBuffer();
+
+      // ** ใช้โฟลเดอร์ public แทน AWS_S3_PREFIX **
+      const baseName = path.basename(originalname, path.extname(originalname));
+      const timestamp = Date.now();
+      const key = `${companyFolder}/public/${baseName}_${timestamp}.webp`;
+
+      // สร้าง presigned URL
+      const cmd = new PutObjectCommand({
+        Bucket: process.env.AWS_BUCKET,
+        Key: key,
+        ContentType: "image/webp",
+      });
+      const presignedUrl = await getSignedUrl(s3, cmd, { expiresIn: 900 });
+      const publicUrl = `https://${process.env.AWS_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
+
+      return res.json({ presignedUrl, publicUrl });
+    } catch (err) {
+      console.error("Error in uploadPackageImage:", err);
+      return res.status(500).json({ error: err.message || "Internal server error" });
     }
   }
 );
+
 
 app.post("/uploadItemImage", uploadImage.single("itemImage"), (req, res) => {
   try {
@@ -2434,7 +2459,6 @@ app.post("/uploadSlip", uploadImage.single("slip"), (req, res) => {
   }
 });
 
-// ── New /uploadVerifyImg endpoint ───────────────────────────────────────────
 // Updated /uploadVerifyImg endpoint: logs full errors for easier debugging
 app.post(
   "/uploadVerifyImg",
