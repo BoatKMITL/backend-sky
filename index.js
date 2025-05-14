@@ -398,32 +398,34 @@ app.get("/customersaddresses", async (req, res) => {
 });
 
 /* ------------------------- GET /customerspackages ------------------------- */
+// ✔︎ GET /customerspackages (with Date_create AS received_date)
 app.get("/customerspackages", async (req, res) => {
   const { id, emp_id } = req.query;
 
   try {
-    /* 1) ถ้ามี emp_id ให้สลับไปใช้ฐานข้อมูลของบริษัทนั้นก่อน */
-    await switchToEmployeeDB(emp_id); // ← ใช้ helper เดิม
+    // 1) ถ้ามี emp_id ให้สลับไปใช้ฐานข้อมูลของบริษัทนั้นก่อน
+    await switchToEmployeeDB(emp_id);
 
-    /* 2) เตรียม SQL พร้อมพารามิเตอร์ */
+    // 2) เตรียม SQL พร้อมพารามิเตอร์
     const processedId = id ?? null; // id === undefined → NULL
     const sql = `
-        SELECT
-            p.*,
-            COALESCE(SUM(CASE WHEN i.item_status = 0 THEN 1 ELSE 0 END), 0) AS sum0,
-            COALESCE(SUM(CASE WHEN i.item_status = 1 THEN 1 ELSE 0 END), 0) AS sum1
-        FROM packages p
-        LEFT JOIN items i ON p.tracking_number = i.tracking_number
-        WHERE ${
-          processedId === null ? "p.customer_id IS NULL" : "p.customer_id = ?"
-        }
-        GROUP BY p.tracking_number
-      `;
+      SELECT
+        p.*,
+        p.Date_create         AS received_date,
+        COALESCE(SUM(CASE WHEN i.item_status = 0 THEN 1 ELSE 0 END), 0) AS sum0,
+        COALESCE(SUM(CASE WHEN i.item_status = 1 THEN 1 ELSE 0 END), 0) AS sum1
+      FROM packages p
+      LEFT JOIN items i ON p.tracking_number = i.tracking_number
+      WHERE ${
+        processedId === null ? "p.customer_id IS NULL" : "p.customer_id = ?"
+      }
+      GROUP BY p.tracking_number;
+    `;
     const params = processedId === null ? [] : [processedId];
 
-    /* 3) คิวรีแล้วส่งกลับ */
-    const rows = await q(sql, params); // ← helper q() คืน Promise
-    return res.json(rows); // *** คืนค่าเหมือนเดิม ***
+    // 3) คิวรีแล้วส่งกลับ
+    const rows = await q(sql, params);
+    return res.json(rows);
   } catch (e) {
     console.error(e.msg || e.message);
     return res
@@ -1855,7 +1857,6 @@ app.post("/editsendaddr", async (req, res) => {
   }
 });
 
-
 // Setting-------------------------------------------------------------------------------------------------------------------
 app.get("/company_info", (req, res) => {
   const { emp_id } = req.query;
@@ -2372,9 +2373,7 @@ app.post(
 
     // 2) ถอดรหัส emp_id
     const enc = req.query.emp_id_raw || req.query.emp_id;
-    const empId = req.query.emp_id_raw
-      ? decryptEmpId(enc)
-      : req.query.emp_id;
+    const empId = req.query.emp_id_raw ? decryptEmpId(enc) : req.query.emp_id;
     if (!empId) {
       return res.status(400).json({ error: "Invalid or missing emp_id" });
     }
@@ -2394,9 +2393,7 @@ app.post(
       const companyFolder = rows[0].emp_database;
 
       // 4) แปลงเป็น WebP (option)
-      const uploadBuffer = await sharp(buffer)
-        .webp({ quality: 80 })
-        .toBuffer();
+      const uploadBuffer = await sharp(buffer).webp({ quality: 80 }).toBuffer();
 
       // 5) สร้าง S3 key: <emp_database>/public/package/<base>_<ts>.webp
       const baseName = path.basename(originalname, path.extname(originalname));
@@ -2423,8 +2420,6 @@ app.post(
     }
   }
 );
-
-
 
 app.post(
   "/uploadItemImage",
@@ -2461,9 +2456,7 @@ app.post(
       const companyFolder = rows[0].emp_database;
 
       // แปลงเป็น WebP
-      const webpBuffer = await sharp(buffer)
-        .webp({ quality: 80 })
-        .toBuffer();
+      const webpBuffer = await sharp(buffer).webp({ quality: 80 }).toBuffer();
 
       // สร้าง S3 key
       const baseName = path.basename(originalname, path.extname(originalname));
@@ -2517,7 +2510,9 @@ app.post(
   async (req, res) => {
     // 1) Ensure file present
     if (!req.file) {
-      return res.status(400).json({ error: "No file uploaded. Ensure field name is 'verifyImg'." });
+      return res
+        .status(400)
+        .json({ error: "No file uploaded. Ensure field name is 'verifyImg'." });
     }
 
     const { originalname, buffer } = req.file;
@@ -2566,18 +2561,21 @@ app.post(
         Key: s3Key,
         ContentType: "image/webp",
       });
-      const presignedUrl = await getSignedUrl(s3, putCommand, { expiresIn: 900 });
+      const presignedUrl = await getSignedUrl(s3, putCommand, {
+        expiresIn: 900,
+      });
       const publicUrl = `https://${process.env.AWS_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/${s3Key}`;
 
       return res.json({ presignedUrl, publicUrl });
     } catch (err) {
       console.error("Error in /uploadVerifyImg:", err);
       // Send full error message back for debugging
-      return res.status(500).json({ error: err.message || "Internal server error" });
+      return res
+        .status(500)
+        .json({ error: err.message || "Internal server error" });
     }
   }
 );
-
 
 app.post("/deleteLogoImages", (req, res) => {
   try {
