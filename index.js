@@ -67,6 +67,8 @@ const db = mysql.createConnection({
   password: "LN5avYu2KUwGDR6Ytreg",
   port: "3306",
   database: "sharebil_sky4you",
+  timezone: "+07:00",    // ← เพิ่มตรงนี้
+
 });
 
 const companydb = mysql.createConnection({
@@ -75,6 +77,8 @@ const companydb = mysql.createConnection({
   password: "LN5avYu2KUwGDR6Ytreg",
   port: "3306",
   database: "sharebil_sky4you",
+  timezone: "+07:00",    // ← เพิ่มตรงนี้
+
 });
 
 function q(sql, params = []) {
