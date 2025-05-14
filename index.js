@@ -2362,52 +2362,68 @@ app.post(
   "/uploadPackageImage",
   uploadMemory.single("packageImage"),
   async (req, res) => {
+    // 1) ตรวจสอบไฟล์
     if (!req.file) {
-      return res.status(400).json({ error: "No file uploaded (field 'packageImage')" });
+      return res
+        .status(400)
+        .json({ error: "No file uploaded (field 'packageImage')" });
     }
     const { originalname, buffer } = req.file;
 
-    // ดึง emp_id มาเหมือนเดิม...
-    const encrypted = req.query.emp_id_raw || req.query.emp_id;
-    const empId = req.query.emp_id_raw ? decryptEmpId(encrypted) : req.query.emp_id;
-    if (!empId) return res.status(400).json({ error: "Invalid or missing emp_id" });
+    // 2) ถอดรหัส emp_id
+    const enc = req.query.emp_id_raw || req.query.emp_id;
+    const empId = req.query.emp_id_raw
+      ? decryptEmpId(enc)
+      : req.query.emp_id;
+    if (!empId) {
+      return res.status(400).json({ error: "Invalid or missing emp_id" });
+    }
 
     try {
-      // lookup emp_database
+      // 3) ดึง emp_database
       const rows = await new Promise((resolve, reject) => {
         companydb.query(
           "SELECT emp_database FROM employee WHERE emp_id = ?",
           [empId],
-          (err, results) => err ? reject(err) : resolve(results)
+          (err, results) => (err ? reject(err) : resolve(results))
         );
       });
-      if (!rows.length) return res.status(404).json({ error: "Employee not found" });
+      if (!rows.length) {
+        return res.status(404).json({ error: "Employee not found" });
+      }
       const companyFolder = rows[0].emp_database;
 
-      // แปลงเป็น WebP ถ้าต้องการ
-      const uploadBuffer = await sharp(buffer).webp({ quality: 80 }).toBuffer();
+      // 4) แปลงเป็น WebP (option)
+      const uploadBuffer = await sharp(buffer)
+        .webp({ quality: 80 })
+        .toBuffer();
 
-      // ** ใช้โฟลเดอร์ public แทน AWS_S3_PREFIX **
+      // 5) สร้าง S3 key: <emp_database>/public/package/<base>_<ts>.webp
       const baseName = path.basename(originalname, path.extname(originalname));
       const timestamp = Date.now();
-      const key = `${companyFolder}/public/${baseName}_${timestamp}.webp`;
+      const key = `${companyFolder}/public/package/${baseName}_${timestamp}.webp`;
 
-      // สร้าง presigned URL
+      // 6) สร้าง presigned URL สำหรับ PUT
       const cmd = new PutObjectCommand({
         Bucket: process.env.AWS_BUCKET,
         Key: key,
         ContentType: "image/webp",
       });
       const presignedUrl = await getSignedUrl(s3, cmd, { expiresIn: 900 });
+
+      // 7) สร้าง public URL (ผ่าน CloudFront หรือ S3 ตรง)
       const publicUrl = `https://${process.env.AWS_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
 
       return res.json({ presignedUrl, publicUrl });
     } catch (err) {
-      console.error("Error in uploadPackageImage:", err);
-      return res.status(500).json({ error: err.message || "Internal server error" });
+      console.error("Error in /uploadPackageImage:", err);
+      return res
+        .status(500)
+        .json({ error: err.message || "Internal server error" });
     }
   }
 );
+
 
 
 app.post("/uploadItemImage", uploadImage.single("itemImage"), (req, res) => {
