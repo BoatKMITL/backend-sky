@@ -2587,6 +2587,7 @@ app.post(
 app.post("/deleteLogoImages", (req, res) => {
   try {
     // Define the directory where the images are stored
+    const { photo_url } = req.body;
     const directoryPath = path.join(
       process.env.RAILWAY_VOLUME_MOUNT_PATH,
       "uploads",
@@ -2603,7 +2604,7 @@ app.post("/deleteLogoImages", (req, res) => {
         }
 
         // Filter files starting with "logo"
-        const logoFiles = files.filter((file) => file.startsWith("logo"));
+        const logoFiles = files.filter((file) => file.startsWith(photo_url));
         // Delete each matching file
         if (logoFiles.length > 0) {
           const filePath = path.join(directoryPath, logoFiles[0]);
