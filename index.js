@@ -744,8 +744,8 @@ app.post("/addpackage", (req, res) => {
     customer_id === "MISSINGITEMS" ? null : customer_id;
   const tracking_number = req.body.tracking_number;
   const photo_url = req.body.photo_url;
-  if (req.body.subbox_cost !== undefined) {
-    const packages_cost = req.body.subbox_cost;
+  if (req.body.packages_cost !== undefined) {
+    const packages_cost = req.body.packages_cost;
     const query1 =
       "INSERT INTO `packages` (`tracking_number`, `customer_id`, `packages_cost`, `photo_url`) VALUES (?, ?, ?);";
     db.query(
