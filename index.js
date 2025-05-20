@@ -12,6 +12,26 @@ const uploadMemory = multer({ storage: multer.memoryStorage() });
 const sharp = require("sharp");
 
 require("dotenv").config();
+
+// It's good practice to check for essential environment variables at startup
+const requiredEnvVars = [
+  "AWS_REGION",
+  "AWS_ACCESS_KEY",
+  "AWS_SECRET_KEY",
+  "AWS_BUCKET",
+  "EMP_ID_KEY",
+  "RAILWAY_VOLUME_MOUNT_PATH",
+];
+for (const envVar of requiredEnvVars) {
+  if (!process.env[envVar]) {
+    console.warn(`Warning: Environment variable ${envVar} is not set.`);
+    // Depending on the variable, you might want to throw an error and exit
+    // if (envVar === "RAILWAY_VOLUME_MOUNT_PATH") { // Example critical var
+    //   throw new Error(`${envVar} is required and not set.`);
+    // }
+  }
+}
+
 process.env.AWS_S3_DISABLE_CHECKSUMS = "true"; // ปิด CRC32 placeholder
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
 const {
@@ -20,18 +40,27 @@ const {
   DeleteObjectCommand,
 } = require("@aws-sdk/client-s3");
 
-const s3 = new S3Client({
+const s3ClientConfig = {
   region: process.env.AWS_REGION,
-  credentials: {
+};
+if (process.env.AWS_ACCESS_KEY && process.env.AWS_SECRET_KEY) {
+  s3ClientConfig.credentials = {
     accessKeyId: process.env.AWS_ACCESS_KEY,
     secretAccessKey: process.env.AWS_SECRET_KEY,
-  },
-});
+  };
+} else {
+  console.warn(
+    "AWS credentials (AWS_ACCESS_KEY, AWS_SECRET_KEY) are not set. S3 operations might fail if IAM roles are not configured."
+  );
+}
 
-/* ===== AES key (ควรเก็บใน .env) ===== */
-const EMP_KEY = process.env.EMP_ID_KEY || "sky45678you"; // ย้ายไป .env ภายหลังได้
+const s3 = new S3Client(s3ClientConfig);
+
+/* ===== AES key (ควรเก็บใน .env) ===== */
+const EMP_KEY = process.env.EMP_ID_KEY || "sky45678you"; // This default is for development only.
 
 function decryptEmpId(enc) {
+  if (!enc || typeof enc !== "string") return null;
   try {
     const encrypted =
       enc.replace(/-/g, "+").replace(/_/g, "/") +
@@ -39,7 +68,8 @@ function decryptEmpId(enc) {
     const bytes = CryptoJS.AES.decrypt(encrypted, EMP_KEY);
     const plain = bytes.toString(CryptoJS.enc.Utf8);
     return plain || null;
-  } catch {
+  } catch (error) {
+    console.error("Error decrypting emp_id:", error.message);
     return null;
   }
 }
@@ -53,6 +83,10 @@ app.use((req, _res, next) => {
     if (plain) {
       req.query.emp_id_raw = req.query.emp_id; // เก็บต้นฉบับเผื่ออยากใช้
       req.query.emp_id = plain; // เขียนทับ → โค้ดเดิมใช้ได้ทันที
+    } else {
+      // Optional: handle invalid encrypted emp_id in query
+      // console.warn("Failed to decrypt emp_id from query:", req.query.emp_id);
+      // req.query.emp_id = null; // Or remove it, or send an error
     }
   }
   if (req.body && req.body.emp_id) {
@@ -60,30 +94,42 @@ app.use((req, _res, next) => {
     if (plain) {
       req.body.emp_id_raw = req.body.emp_id;
       req.body.emp_id = plain;
+    } else {
+      // Optional: handle invalid encrypted emp_id in body
+      // console.warn("Failed to decrypt emp_id from body:", req.body.emp_id);
+      // req.body.emp_id = null;
     }
   }
   next();
 });
 
-const db = mysql.createConnection({
-  host: "th257.ruk-com.in.th",
-  user: "sharebil_sky4you",
-  password: "LN5avYu2KUwGDR6Ytreg",
-  port: "3306",
-  database: "sharebil_sky4you",
-  timezone: "+07:00", // ← เพิ่มตรงนี้
+const dbConfig = {
+  host: process.env.DB_HOST || "th257.ruk-com.in.th",
+  user: process.env.DB_USER || "sharebil_sky4you",
+  password: process.env.DB_PASSWORD || "LN5avYu2KUwGDR6Ytreg",
+  port: process.env.DB_PORT || "3306",
+  database: process.env.DB_NAME || "sharebil_sky4you",
+  timezone: "+07:00",
+};
+
+const db = mysql.createConnection(dbConfig);
+const companydb = mysql.createConnection(dbConfig); // Assuming companydb uses the same initial credentials
+
+db.connect((err) => {
+  if (err) {
+    console.error("Error connecting to main DB:", err.stack);
+    return;
+  }
+  console.log("Connected to main DB as id", db.threadId);
 });
 
-const companydb = mysql.createConnection({
-  host: "th257.ruk-com.in.th",
-  user: "sharebil_sky4you",
-  password: "LN5avYu2KUwGDR6Ytreg",
-  port: "3306",
-  database: "sharebil_sky4you",
-  timezone: "+07:00", // ← เพิ่มตรงนี้
+companydb.connect((err) => {
+  if (err) {
+    console.error("Error connecting to company DB:", err.stack);
+    return;
+  }
+  console.log("Connected to company DB as id", companydb.threadId);
 });
-
-// ... หลังการตั้งค่า S3Client หรือในส่วน Utilities
 
 /**
  * ดึง S3 object key จาก URL ของ S3
@@ -91,11 +137,9 @@ const companydb = mysql.createConnection({
  * @returns {string|null} S3 object key หรือ null ถ้า URL ไม่ถูกต้อง
  */
 function extractS3KeyFromUrl(url) {
-  if (!url) return null;
+  if (!url || typeof url !== "string") return null;
   try {
     const urlObject = new URL(url);
-    // ตัวอย่าง URL: https://my-bucket.s3.my-region.amazonaws.com/path/to/object.jpg
-    // pathname จะเป็น /path/to/object.jpg เราต้องลบ / ตัวแรกออก
     if (urlObject.hostname.endsWith(".amazonaws.com")) {
       return urlObject.pathname.startsWith("/")
         ? urlObject.pathname.substring(1)
@@ -103,7 +147,7 @@ function extractS3KeyFromUrl(url) {
     }
     return null;
   } catch (e) {
-    console.error("URL ไม่ถูกต้องสำหรับการดึง S3 key:", url, e);
+    console.error("URL ไม่ถูกต้องสำหรับการดึง S3 key:", url, e.message);
     return null;
   }
 }
@@ -117,20 +161,25 @@ async function deleteS3Object(s3Key) {
     console.log("ไม่มี S3 key สำหรับการลบ");
     return;
   }
+  if (!process.env.AWS_BUCKET) {
+    console.error(
+      "AWS_BUCKET environment variable is not set. Cannot delete S3 object."
+    );
+    return;
+  }
   try {
     const command = new DeleteObjectCommand({
-      Bucket: process.env.AWS_BUCKET, // <--- ตรวจสอบว่ามีตัวแปรนี้ใน .env
+      Bucket: process.env.AWS_BUCKET,
       Key: s3Key,
     });
     await s3.send(command);
     console.log(`ลบอ็อบเจกต์ S3 สำเร็จ: ${s3Key}`);
   } catch (error) {
-    // ควร log error ไว้ แต่ไม่จำเป็นต้องทำให้ request ทั้งหมดล้มเหลว
-    // เพราะเป้าหมายหลักอาจเป็นการล้างข้อมูลใน DB
     console.error(`ไม่สามารถลบอ็อบเจกต์ S3 ${s3Key}:`, error.message);
   }
 }
 
+/* ---------- helper : แปลง db.query ให้คืน Promise ---------- */
 function q(sql, params = []) {
   return new Promise((resolve, reject) => {
     db.query(sql, params, (err, rows) => (err ? reject(err) : resolve(rows)));
@@ -139,17 +188,36 @@ function q(sql, params = []) {
 
 function switchToEmployeeDB(emp_id) {
   return new Promise((resolve, reject) => {
-    if (!emp_id) return resolve(); // ไม่ได้ส่ง emp_id มาก็ไม่ต้องสลับ DB
+    if (!emp_id) {
+      // console.log("No emp_id provided, not switching DB.");
+      return resolve(); // ไม่ได้ส่ง emp_id มาก็ไม่ต้องสลับ DB
+    }
 
     companydb.query(
       "SELECT emp_database, emp_datapass FROM employee WHERE emp_id = ?",
       [emp_id],
       (err, rows) => {
-        if (err) return reject({ status: 500, msg: "Database error", err });
+        if (err)
+          return reject({
+            status: 500,
+            msg: "Database error during employee lookup",
+            err,
+          });
         if (!rows || rows.length === 0)
-          return reject({ status: 404, msg: "Employee not found" });
+          return reject({
+            status: 404,
+            msg: `Employee not found for emp_id: ${emp_id}`,
+          });
 
         const { emp_database, emp_datapass } = rows[0];
+        if (!emp_database || !emp_datapass) {
+          // Added check for null/empty credentials
+          return reject({
+            status: 500,
+            msg: `Database credentials not found for employee: ${emp_id}`,
+          });
+        }
+
         db.changeUser(
           {
             user: emp_database,
@@ -160,9 +228,10 @@ function switchToEmployeeDB(emp_id) {
             if (changeErr)
               return reject({
                 status: 500,
-                msg: "Failed to switch database",
+                msg: `Failed to switch database to ${emp_database}`,
                 err: changeErr,
               });
+            // console.log(`Switched DB connection to ${emp_database} for emp_id: ${emp_id}`);
             resolve(); // สลับสำเร็จ
           }
         );
@@ -171,61 +240,77 @@ function switchToEmployeeDB(emp_id) {
   });
 }
 
-function firstRowOr404(res, rows, notFoundMsg = "Employee not found") {
+function firstRowOr404(res, rows, notFoundMsg = "Resource not found") {
   if (!rows || rows.length === 0) {
     res.status(404).json({ error: notFoundMsg });
-    return null; // caller ต้องเช็กว่าเป็น null ไหม
+    return null;
   }
   return rows[0];
 }
 
 // Login-------------------------------------------------------------------------------------------------------------------
-
 app.post("/login", (req, res) => {
-  /* แยกสองรูปแบบการล็อกอิน */
+  if (!req.body) {
+    return res.status(400).json({ error: "Request body is missing" });
+  }
+  // emp_id in body is already decrypted by middleware if it was encrypted
   const byEmpId = req.body.emp_id !== undefined && req.body.emp_id !== null;
 
-  /* เลือก SQL และพารามิเตอร์ตามรูปแบบ */
-  const sql = byEmpId
-    ? "SELECT * FROM `employee` WHERE `emp_id` = ?"
-    : "SELECT * FROM `employee` WHERE `username` = ? AND `password` = ?";
-  const params = byEmpId
-    ? [req.body.emp_id]
-    : [req.body.username, req.body.password];
+  let sql, params;
+  if (byEmpId) {
+    sql = "SELECT * FROM `employee` WHERE `emp_id` = ?";
+    params = [req.body.emp_id];
+  } else {
+    if (req.body.username === undefined || req.body.password === undefined) {
+      return res
+        .status(400)
+        .json({
+          error: "Username and password are required for standard login",
+        });
+    }
+    sql = "SELECT * FROM `employee` WHERE `username` = ? AND `password` = ?";
+    params = [req.body.username, req.body.password];
+  }
 
-  /* คิวรีฐานข้อมูลกลาง */
   companydb.query(sql, params, (err, results) => {
     if (err) {
-      console.error("Error fetching data:", err.message);
+      console.error("Error fetching data during login:", err.message);
       return res.status(500).json({ error: "Failed to fetch data" });
     }
 
-    /* ---------- ป้องกันแครช ---------- */
     if (!results || results.length === 0) {
       return res
         .status(401)
         .json({ error: "Invalid credentials or employee not found" });
     }
-    /* ---------------------------------- */
 
-    const newDatabase = results[0].emp_database;
-    const newUser = results[0].emp_database;
-    const newPassword = results[0].emp_datapass;
+    const employee = results[0];
+    if (!employee.emp_database || !employee.emp_datapass) {
+      console.error(
+        `Missing database credentials for employee: ${employee.emp_id}`
+      );
+      return res
+        .status(500)
+        .json({
+          error: "Configuration error: Employee database details are missing.",
+        });
+    }
 
-    /* เปลี่ยน connection ไปยัง DB บริษัทนั้น */
     db.changeUser(
       {
-        user: newUser,
-        password: newPassword,
-        database: newDatabase,
+        user: employee.emp_database,
+        password: employee.emp_datapass,
+        database: employee.emp_database,
       },
       (changeErr) => {
         if (changeErr) {
-          console.error("Error changing database:", changeErr.message);
+          console.error(
+            "Error changing database during login:",
+            changeErr.message
+          );
           return res.status(500).json({ error: "Failed to switch database" });
         }
-        /* ส่งกลับ results เหมือนเดิม */
-        return res.json(results);
+        return res.json(results); // Send original employee data
       }
     );
   });
@@ -233,23 +318,32 @@ app.post("/login", (req, res) => {
 
 app.post("/logout", (req, res) => {
   db.changeUser(
+    // Revert to default credentials
     {
-      user: "sharebil_sky4you",
-      password: "LN5avYu2KUwGDR6Ytreg",
-      database: "sharebil_sky4you",
+      user: dbConfig.user,
+      password: dbConfig.password,
+      database: dbConfig.database,
     },
     (changeErr) => {
       if (changeErr) {
-        console.error("Error changing database:", changeErr.message);
+        console.error(
+          "Error changing database during logout:",
+          changeErr.message
+        );
         return res.status(500).json({ error: "Failed to switch database" });
       }
-      res.json("logout finish");
+      res.json({
+        message: "Logout successful, connection reverted to default.",
+      });
     }
   );
 });
+
 // Home-------------------------------------------------------------------------------------------------------------------
 app.get("/allcustomers", async (req, res) => {
   try {
+    // This query seems complex and might be inefficient on large datasets. Consider optimizing.
+    // The original query for /allcustomers had a complex subquery.
     const rows = await q(
       "SELECT c.*, COUNT( CASE WHEN NOT EXISTS ( SELECT 1 FROM items AS i WHERE i.tracking_number = p.tracking_number GROUP BY i.tracking_number HAVING MIN(i.item_status) = 1 AND MAX(i.item_status) = 1 ) THEN p.tracking_number END ) AS package_count FROM customers AS c LEFT JOIN packages AS p ON c.customer_id = p.customer_id GROUP BY c.customer_id ORDER BY c.customer_date DESC;"
     );
@@ -263,62 +357,22 @@ app.get("/allcustomers", async (req, res) => {
 app.get("/customers", async (req, res) => {
   const sql = `
       SELECT c.*,
-             COUNT(p.tracking_number) AS package_count
+             COUNT(DISTINCT p.tracking_number) AS package_count 
+             /* Using DISTINCT for package_count to avoid issues if items join multiplies rows */
       FROM customers c
-      LEFT JOIN packages p
-             ON c.customer_id = p.customer_id
-      WHERE NOT EXISTS (
+      LEFT JOIN packages p ON c.customer_id = p.customer_id
+      /* 
+        The NOT EXISTS condition seems to exclude customers if ALL their packages have ALL items with status 1.
+        If a customer has one package fully status 1, and another package not, they might still appear.
+        Clarify the exact logic needed for "package_count" if this isn't intended.
+      */
+      WHERE (p.tracking_number IS NULL OR NOT EXISTS ( 
           SELECT 1
           FROM items i
           WHERE i.tracking_number = p.tracking_number
           GROUP BY i.tracking_number
-          HAVING MIN(i.item_status) = 1 AND MAX(i.item_status) = 1
-      )
-      GROUP BY c.customer_id
-      ORDER BY c.customer_date DESC
-    `;
-  try {
-    const rows = await q(sql);
-    return res.json(rows);
-  } catch (err) {
-    console.error("Error fetching customers:", err.message);
-    return res.status(500).json({ error: "Failed to fetch data" });
-  }
-});
-
-/* ---------- helper : แปลง db.query ให้คืน Promise ---------- */
-function q(sql, params = []) {
-  return new Promise((resolve, reject) => {
-    db.query(sql, params, (err, rows) => (err ? reject(err) : resolve(rows)));
-  });
-}
-
-/* --------------------------- 1. /allcustomers --------------------------- */
-app.get("/allcustomers", async (req, res) => {
-  try {
-    const rows = await q("SELECT * FROM customers ORDER BY customer_date DESC");
-    return res.json(rows);
-  } catch (err) {
-    console.error("Error fetching all customers:", err.message);
-    return res.status(500).json({ error: "Failed to fetch data" });
-  }
-});
-
-/* --------------------------- 2. /customers --------------------------- */
-app.get("/customers", async (req, res) => {
-  const sql = `
-      SELECT c.*,
-             COUNT(p.tracking_number) AS package_count
-      FROM customers c
-      LEFT JOIN packages p
-             ON c.customer_id = p.customer_id
-      WHERE NOT EXISTS (
-          SELECT 1
-          FROM items i
-          WHERE i.tracking_number = p.tracking_number
-          GROUP BY i.tracking_number
-          HAVING MIN(i.item_status) = 1 AND MAX(i.item_status) = 1
-      )
+          HAVING MIN(i.item_status) = 1 AND MAX(i.item_status) = 1 
+      ))
       GROUP BY c.customer_id
       ORDER BY c.customer_date DESC
     `;
@@ -333,38 +387,36 @@ app.get("/customers", async (req, res) => {
 
 /* --------------------- 3. /deleteCustomer (with Tx) --------------------- */
 app.post("/deleteCustomer", async (req, res) => {
-  // <--- ทำให้เป็น async
-  const { customer_id } = req.body;
-  if (!customer_id)
+  if (!req.body || !req.body.customer_id) {
     return res
       .status(400)
-      .json({ success: false, message: "Customer ID is required" });
+      .json({ success: false, message: "Customer ID is required in body" });
+  }
+  const { customer_id } = req.body;
 
   db.beginTransaction(async (txErr) => {
-    // <--- ทำให้ callback ของ transaction เป็น async
     if (txErr) {
-      console.error("Error starting transaction:", txErr.message);
+      console.error(
+        "Error starting transaction for deleteCustomer:",
+        txErr.message
+      );
       return res
         .status(500)
         .json({ success: false, message: "Failed to start transaction" });
     }
 
     try {
-      // --- ส่วนลบข้อมูลจาก S3 ---
-      // 1. ดึง package ทั้งหมดของลูกค้า
       const packagesToDelete = await q(
         "SELECT tracking_number, photo_url FROM packages WHERE customer_id = ?",
         [customer_id]
       );
 
       for (const pkg of packagesToDelete) {
-        // ลบรูปของ package
         if (pkg.photo_url) {
           const packageS3Key = extractS3KeyFromUrl(pkg.photo_url);
           if (packageS3Key) await deleteS3Object(packageS3Key);
         }
 
-        // ดึงและลบรูปของ item ใน package นี้
         const itemsInPackage = await q(
           "SELECT item_id, photo_url FROM items WHERE tracking_number = ?",
           [pkg.tracking_number]
@@ -376,11 +428,8 @@ app.post("/deleteCustomer", async (req, res) => {
           }
         }
       }
-      // --- จบส่วนลบข้อมูลจาก S3 ---
 
-      // คำสั่งลบข้อมูลจาก DB เดิม
       const statements = [
-        // ... (คำสั่ง SQL เดิมของคุณ) ...
         `DELETE FROM subbox_item
          WHERE subbox_id IN (
            SELECT subbox_id FROM subbox
@@ -397,17 +446,19 @@ app.post("/deleteCustomer", async (req, res) => {
         `DELETE FROM packages WHERE customer_id = ?`,
         `DELETE FROM box WHERE customer_id = ?`,
         `DELETE FROM appointment WHERE customer_id = ?`,
-        `DELETE FROM addresses   WHERE customer_id = ?`,
-        `DELETE FROM customers   WHERE customer_id = ?`,
+        `DELETE FROM addresses WHERE customer_id = ?`,
+        `DELETE FROM customers WHERE customer_id = ?`,
       ];
 
       for (const sql of statements) {
+        // All these statements use customer_id as the parameter.
+        // If any used a different parameter, it would need adjustment.
         await q(sql, [customer_id]);
       }
 
       db.commit((commitErr) => {
         if (commitErr) {
-          console.error("Commit error:", commitErr.message);
+          console.error("Commit error for deleteCustomer:", commitErr.message);
           return db.rollback(() =>
             res
               .status(500)
@@ -426,6 +477,7 @@ app.post("/deleteCustomer", async (req, res) => {
         res.status(500).json({
           success: false,
           message: "Failed to delete customer and associated data",
+          error: err.message, // Provide error message for debugging
         })
       );
     }
@@ -434,33 +486,48 @@ app.post("/deleteCustomer", async (req, res) => {
 
 // Customer-------------------------------------------------------------------------------------------------------------------
 app.get("/customersDetails", async (req, res) => {
-  const { id, emp_id } = req.query;
+  const { id, emp_id } = req.query; // emp_id is already decrypted by middleware
 
   if (!id)
     return res.status(400).json({ error: "customer_id (id) is required" });
 
   try {
-    await switchToEmployeeDB(emp_id);
+    await switchToEmployeeDB(emp_id); // emp_id can be null/undefined, switchToEmployeeDB handles it
     const rows = await q("SELECT * FROM customers WHERE customer_id = ?", [id]);
-    return res.json(rows); // *** คืนค่าเหมือนเดิม ***
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({ error: "Customer details not found" });
+    }
+    return res.json(rows);
   } catch (e) {
-    console.error(e.msg || e.message);
-    return res.status(e.status || 500).json({ error: e.msg || "Error" });
+    console.error(
+      "Error in /customersDetails:",
+      e.msg || e.message,
+      e.err || ""
+    );
+    return res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Error fetching customer details" });
   }
 });
 
 app.get("/addressesinfo", async (req, res) => {
-  const { id } = req.query;
+  const { id, emp_id } = req.query; // emp_id for potential DB switch
 
   if (!id)
     return res.status(400).json({ error: "address_id (id) is required" });
 
   try {
+    await switchToEmployeeDB(emp_id); // Switch DB if emp_id is provided
     const rows = await q("SELECT * FROM addresses WHERE address_id = ?", [id]);
-    return res.json(rows); // *** คืนค่าเหมือนเดิม ***
-  } catch (err) {
-    console.error(err.message);
-    return res.status(500).json({ error: "Failed to fetch data" });
+    if (!rows || rows.length === 0) {
+      return res.status(404).json({ error: "Address info not found" });
+    }
+    return res.json(rows);
+  } catch (e) {
+    console.error("Error in /addressesinfo:", e.msg || e.message, e.err || "");
+    return res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Error fetching address info" });
   }
 });
 
@@ -473,28 +540,30 @@ app.get("/customersaddresses", async (req, res) => {
   try {
     await switchToEmployeeDB(emp_id);
     const rows = await q("SELECT * FROM addresses WHERE customer_id = ?", [id]);
-    return res.json(rows); // *** คืนค่าเหมือนเดิม ***
+    // It's okay if a customer has no addresses, return empty array.
+    return res.json(rows);
   } catch (e) {
-    console.error(e.msg || e.message);
-    return res.status(e.status || 500).json({ error: e.msg || "Error" });
+    console.error(
+      "Error in /customersaddresses:",
+      e.msg || e.message,
+      e.err || ""
+    );
+    return res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Error fetching customer addresses" });
   }
 });
 
-/* ------------------------- GET /customerspackages ------------------------- */
-// ✔︎ GET /customerspackages (with Date_create AS received_date)
 app.get("/customerspackages", async (req, res) => {
   const { id, emp_id } = req.query;
 
   try {
-    // 1) ถ้ามี emp_id ให้สลับไปใช้ฐานข้อมูลของบริษัทนั้นก่อน
     await switchToEmployeeDB(emp_id);
-
-    // 2) เตรียม SQL พร้อมพารามิเตอร์
-    const processedId = id ?? null; // id === undefined → NULL
+    const processedId = id ?? null;
     const sql = `
       SELECT
         p.*,
-        p.Date_create         AS received_date,
+        p.Date_create AS received_date, /* Ensure Date_create column exists and is populated */
         COALESCE(SUM(CASE WHEN i.item_status = 0 THEN 1 ELSE 0 END), 0) AS sum0,
         COALESCE(SUM(CASE WHEN i.item_status = 1 THEN 1 ELSE 0 END), 0) AS sum1
       FROM packages p
@@ -502,30 +571,38 @@ app.get("/customerspackages", async (req, res) => {
       WHERE ${
         processedId === null ? "p.customer_id IS NULL" : "p.customer_id = ?"
       }
-      GROUP BY p.tracking_number;
+      GROUP BY p.tracking_number, p.Date_create /* Added p.Date_create to GROUP BY for SQL standard */
+      ORDER BY p.Date_create DESC; /* Assuming Date_create is how you want to order */
     `;
     const params = processedId === null ? [] : [processedId];
-
-    // 3) คิวรีแล้วส่งกลับ
     const rows = await q(sql, params);
     return res.json(rows);
   } catch (e) {
-    console.error(e.msg || e.message);
+    console.error(
+      "Error in /customerspackages:",
+      e.msg || e.message,
+      e.err || ""
+    );
     return res
       .status(e.status || 500)
-      .json({ error: e.msg || "Failed to fetch data" });
+      .json({ error: e.msg || "Failed to fetch customer packages" });
   }
 });
 
-app.get("/nullpackages", async (_req, res) => {
+app.get("/nullpackages", async (req, res) => {
+  // Added emp_id for consistency
+  const { emp_id } = req.query;
   try {
+    await switchToEmployeeDB(emp_id);
     const rows = await q(
-      "SELECT p.* FROM packages p WHERE p.customer_id IS NULL"
+      "SELECT p.*, p.Date_create AS received_date FROM packages p WHERE p.customer_id IS NULL ORDER BY p.Date_create DESC"
     );
-    return res.json(rows); // ↩️ ส่งเหมือนเดิม
-  } catch (err) {
-    console.error(err.message);
-    return res.status(500).json({ error: "Failed to fetch data" });
+    return res.json(rows);
+  } catch (e) {
+    console.error("Error in /nullpackages:", e.msg || e.message, e.err || "");
+    return res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to fetch null-customer packages" });
   }
 });
 
@@ -536,69 +613,87 @@ app.get("/item", async (req, res) => {
     return res.status(400).json({ error: "tracking_number (id) is required" });
 
   try {
-    /* สลับฐานบริษัท (ถ้ามี emp_id) */
     await switchToEmployeeDB(emp_id);
-
-    /* ดึงรายการ item */
     const rows = await q(
       "SELECT * FROM items WHERE tracking_number = ? AND item_status = 0",
       [id]
     );
-    return res.json(rows); // ↩️ ส่งเหมือนเดิม
+    return res.json(rows);
   } catch (e) {
-    console.error(e.msg || e.message);
+    console.error("Error in /item:", e.msg || e.message, e.err || "");
     return res
       .status(e.status || 500)
-      .json({ error: e.msg || "Failed to fetch data" });
+      .json({ error: e.msg || "Failed to fetch items by tracking number" });
   }
 });
 
 app.post("/additems", async (req, res) => {
-  const { customer_id, tracking_number, items } = req.body;
+  if (!req.body)
+    return res.status(400).json({ error: "Request body is missing" });
+  const { customer_id, tracking_number, items, emp_id } = req.body;
 
-  /* validation */
   if (!customer_id || !tracking_number || !Array.isArray(items)) {
-    return res.status(400).json({ error: "missing data" });
+    return res
+      .status(400)
+      .json({
+        error:
+          "Missing or invalid data: customer_id, tracking_number, or items array is required.",
+      });
   }
 
-  /* กรอง item ว่าง ๆ ออกไป */
   const values = items
-    .filter((it) => it?.name && it?.mainCategory)
+    .filter(
+      (it) =>
+        it &&
+        typeof it.name === "string" &&
+        it.name.trim() !== "" &&
+        typeof it.mainCategory === "string" &&
+        it.mainCategory.trim() !== ""
+    )
     .map((it) => [
       tracking_number,
-      it.name,
-      it.mainCategory,
-      it.subCategory ?? "",
-      it.quantity ?? 0,
-      it.weight ?? 0,
-      null,
-      it.photo_url ?? null,
+      it.name.trim(),
+      it.mainCategory.trim(),
+      it.subCategory?.trim() ?? "", // Ensure subCategory is also trimmed if present
+      Number(it.quantity) || 0,
+      Number(it.weight) || 0,
+      null, // packer_id
+      it.photo_url || null,
     ]);
 
   if (values.length === 0) {
-    return res.status(400).json({ error: "no valid items to insert" });
+    return res
+      .status(400)
+      .json({
+        error:
+          "No valid items to insert. Ensure item has name and mainCategory.",
+      });
   }
 
   try {
+    await switchToEmployeeDB(emp_id);
     await q(
       "INSERT INTO items (tracking_number,item_name,item_type,item_subtype,quantity,weight,packer_id,photo_url) VALUES ?",
       [values]
     );
-
-    /* อัปเดตสถานะลูกค้าเป็น Warehouse ถ้ายังไม่มี */
     await q(
-      "UPDATE customers SET status = 'Warehouse' WHERE status IS NULL AND customer_id = ?",
+      "UPDATE customers SET status = 'Warehouse' WHERE (status IS NULL OR status != 'Unpaid') AND customer_id = ?",
       [customer_id]
     );
-
-    return res.send("Values Added and Customer Status Updated");
-  } catch (err) {
-    console.error("additems error:", err.message);
-    return res.status(500).json({ error: "Failed to add items" });
+    return res.json({
+      message: "Items added and customer status updated successfully.",
+    });
+  } catch (e) {
+    console.error("Error in /additems:", e.msg || e.message, e.err || "");
+    return res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to add items" });
   }
 });
 
 app.post("/edititem", async (req, res) => {
+  if (!req.body)
+    return res.status(400).json({ error: "Request body is missing" });
   const {
     item_id,
     item_name,
@@ -607,13 +702,18 @@ app.post("/edititem", async (req, res) => {
     quantity,
     weight,
     photo_url,
+    emp_id,
   } = req.body;
 
   if (!item_id || !item_name || !item_type) {
-    return res.status(400).json({ error: "missing data" });
+    // Basic validation
+    return res
+      .status(400)
+      .json({ error: "Missing required data: item_id, item_name, item_type." });
   }
 
   try {
+    await switchToEmployeeDB(emp_id);
     await q(
       `UPDATE items
            SET item_name   = ?,
@@ -623,281 +723,435 @@ app.post("/edititem", async (req, res) => {
                weight      = ?,
                photo_url   = ?
          WHERE item_id = ?`,
-      [item_name, item_type, item_subtype, quantity, weight, photo_url, item_id]
+      [
+        item_name.trim(),
+        item_type.trim(),
+        item_subtype?.trim() ?? "",
+        Number(quantity) || 0,
+        Number(weight) || 0,
+        photo_url || null,
+        item_id,
+      ]
     );
-    return res.send("Values Edited");
-  } catch (err) {
-    console.error("edititem error:", err.message);
-    return res.status(500).json({ error: "Failed to edit item" });
+    return res.json({ message: "Item edited successfully." });
+  } catch (e) {
+    console.error("Error in /edititem:", e.msg || e.message, e.err || "");
+    return res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to edit item" });
   }
 });
 
 app.post("/deleteitem", async (req, res) => {
-  // <--- ทำให้เป็น async
-  const { customer_id, item_id } = req.body;
+  if (!req.body)
+    return res.status(400).json({ error: "Request body is missing" });
+  const { customer_id, item_id, emp_id } = req.body;
 
   if (!item_id) {
-    return res.status(400).json({ error: "missing item_id" });
+    return res.status(400).json({ error: "Missing item_id" });
   }
 
-  db.beginTransaction(async (txErr) => {
-    // <--- ทำให้ callback ของ transaction เป็น async
-    if (txErr) {
-      console.error("Transaction start error:", txErr.message);
-      return res.status(500).json({ error: "transaction error" });
-    }
+  try {
+    await switchToEmployeeDB(emp_id);
 
-    try {
-      // 1. ดึง photo_url ของ item ก่อนที่จะลบออกจาก DB
-      const [itemToDelete] = await q(
-        "SELECT photo_url FROM items WHERE item_id = ?",
-        [item_id]
-      );
-
-      // 2. ลบรูปภาพจาก S3 ถ้ามี photo_url
-      if (itemToDelete && itemToDelete.photo_url) {
-        const s3Key = extractS3KeyFromUrl(itemToDelete.photo_url);
-        if (s3Key) {
-          await deleteS3Object(s3Key); // <--- ลบจาก S3
-        }
+    db.beginTransaction(async (txErr) => {
+      if (txErr) {
+        console.error("Transaction start error in /deleteitem:", txErr.message);
+        return res
+          .status(500)
+          .json({ error: "Transaction error", details: txErr.message });
       }
 
-      // 3. ลบ item ออกจาก DB
-      await q("DELETE FROM items WHERE item_id = ?", [item_id]);
-
-      // 4. อัปเดต status ของลูกค้า (ถ้ามีการส่ง customer_id มาและเกี่ยวข้อง)
-      let message = "Item Deleted";
-      if (customer_id) {
-        const [{ count }] = await q(
-          `SELECT COUNT(*) AS count
-           FROM items
-           WHERE tracking_number IN (
-                 SELECT tracking_number FROM packages WHERE customer_id = ?
-           ) AND item_status = 0`,
-          [customer_id]
+      try {
+        const [itemToDelete] = await q(
+          "SELECT photo_url FROM items WHERE item_id = ?",
+          [item_id]
         );
 
-        if (count === 0) {
-          await q(
-            "UPDATE customers SET status = NULL WHERE status != 'Unpaid' AND customer_id = ?",
+        if (itemToDelete && itemToDelete.photo_url) {
+          const s3Key = extractS3KeyFromUrl(itemToDelete.photo_url);
+          if (s3Key) {
+            await deleteS3Object(s3Key);
+          }
+        }
+
+        const deleteResult = await q("DELETE FROM items WHERE item_id = ?", [
+          item_id,
+        ]);
+        if (deleteResult.affectedRows === 0) {
+          // Item not found, or already deleted. Consider how to handle.
+          // Maybe rollback and send 404, or commit and inform. For now, proceed.
+          console.warn(
+            `Item with id ${item_id} not found for deletion or already deleted.`
+          );
+        }
+
+        let message = "Item deleted successfully.";
+        if (customer_id) {
+          // Only update customer status if customer_id is provided
+          const [{ count }] = await q(
+            `SELECT COUNT(*) AS count
+             FROM items i
+             JOIN packages p ON i.tracking_number = p.tracking_number
+             WHERE p.customer_id = ? AND i.item_status = 0`,
             [customer_id]
           );
-          message = "Item Deleted and Customer Status Updated to NULL";
+
+          if (count === 0) {
+            await q(
+              "UPDATE customers SET status = NULL WHERE customer_id = ? AND (status = 'Warehouse' OR status IS NULL)", // More specific update
+              [customer_id]
+            );
+            message = "Item deleted and customer status potentially updated.";
+          }
         }
+
+        db.commit((commitErr) => {
+          if (commitErr) {
+            console.error("Commit error in /deleteitem:", commitErr.message);
+            return db.rollback(() =>
+              res
+                .status(500)
+                .json({ error: "Commit failed", details: commitErr.message })
+            );
+          }
+          return res.json({ message });
+        });
+      } catch (err) {
+        console.error("Error during /deleteitem transaction:", err.message);
+        db.rollback(() =>
+          res
+            .status(500)
+            .json({ error: "Failed to delete item", details: err.message })
+        );
       }
-
-      db.commit((commitErr) => {
-        if (commitErr) {
-          console.error("Commit error:", commitErr.message);
-          return db.rollback(() =>
-            res.status(500).json({ error: "commit failed" })
-          );
-        }
-        return res.send(message);
-      });
-    } catch (err) {
-      console.error("deleteitem error:", err.message);
-      db.rollback(() =>
-        res.status(500).json({ error: "Failed to delete item" })
-      );
-    }
-  });
-});
-
-// เเก้ไขต่อด้านล่าง
-
-app.post("/editwarehouse", (req, res) => {
-  const id = req.body.customer_id;
-  const warehouse = req.body.warehouse;
-  const query =
-    "UPDATE `customers` SET `warehouse` = ? WHERE `customers`.`customer_id` = ?;";
-  db.query(query, [warehouse, id], (err, results) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    } else {
-      res.send("Values inserted");
-    }
-  });
-});
-
-app.post("/createcus", (req, res) => {
-  const id = req.body.customer_id;
-  const contact = req.body.contact;
-  const type = req.body.type;
-  const level = req.body.level;
-  const note = req.body.note;
-  const query =
-    "INSERT INTO `customers` (`customer_id`, `contact`, `type`, `level`, `note`) VALUES (?, ?, ?, ?, ?);";
-  db.query(query, [id, contact, type, level, note], (err, results) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    } else {
-      res.send("Values inserted");
-    }
-  });
-});
-
-app.post("/editcus", (req, res) => {
-  const old_id = req.body.old_id;
-  const id = req.body.customer_id;
-  const contact = req.body.contact;
-  const type = req.body.type;
-  const level = req.body.level;
-  const note = req.body.note;
-  const query3 =
-    "UPDATE customers SET customer_id = ?, contact = ?, type = ?, level = ?, note = ? WHERE customer_id = ?;";
-  db.query(query3, [id, contact, type, level, note, old_id], (err, results) => {
-    if (err) {
-      console.error("Error fetching data3:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    } else {
-      res.send("Values Edited");
-    }
-  });
-});
-
-app.post("/addaddr", (req, res) => {
-  const customer_id = req.body.customer_id;
-  const recipient_name = req.body.recipient_name;
-  const phone = req.body.phone;
-  const address = req.body.address;
-  const city = req.body.city;
-  const state = req.body.state;
-  const country = req.body.country;
-  const zipcode = req.body.zipcode;
-  const email = req.body.email;
-  const query1 =
-    "INSERT INTO `addresses` (`customer_id`, `recipient_name`, `phone`, `address`, `city`, `state`, `country`, `zipcode`, `email`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);";
-  db.query(
-    query1,
-    [
-      customer_id,
-      recipient_name,
-      phone,
-      address,
-      city,
-      state,
-      country,
-      zipcode,
-      email,
-    ],
-    (err, results) => {
-      if (err) {
-        console.error("Error fetching data:", err.message);
-        res.status(500).json({ error: "Failed to fetch data" });
-      } else {
-        res.send("Values Edited");
-      }
-    }
-  );
-});
-
-app.post("/editaddr", (req, res) => {
-  const address_id = req.body.address_id;
-  const recipient_name = req.body.recipient_name;
-  const phone = req.body.phone;
-  const address = req.body.address;
-  const city = req.body.city;
-  const state = req.body.state;
-  const country = req.body.country;
-  const zipcode = req.body.zipcode;
-  const query1 =
-    "UPDATE `addresses` SET `recipient_name` = ?, `phone` = ?, `address` = ?, `city` = ?, `state` = ?, `country` = ?, `zipcode` = ? WHERE `address_id` = ?;";
-  db.query(
-    query1,
-    [recipient_name, phone, address, city, state, country, zipcode, address_id],
-    (err, results) => {
-      if (err) {
-        console.error("Error fetching data:", err.message);
-        res.status(500).json({ error: "Failed to fetch data" });
-      } else {
-        res.send("Values Edited");
-      }
-    }
-  );
-});
-
-app.post("/deleteaddr", (req, res) => {
-  const address_id = req.body.address_id;
-  const query1 = "DELETE FROM addresses WHERE `addresses`.`address_id` = ?;";
-  db.query(query1, [address_id], (err, results) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    } else {
-      res.send("Values Edited");
-    }
-  });
-});
-
-app.post("/addpackage", (req, res) => {
-  const customer_id = req.body.customer_id;
-  const processedcustomer_id =
-    customer_id === "MISSINGITEMS" ? null : customer_id;
-  const tracking_number = req.body.tracking_number;
-  const photo_url = req.body.photo_url;
-  if (req.body.packages_cost !== undefined) {
-    const packages_cost = req.body.packages_cost;
-    const query1 =
-      "INSERT INTO `packages` (`tracking_number`, `customer_id`, `packages_cost`, `photo_url`) VALUES (?, ?, ?, ?);";
-    db.query(
-      query1,
-      [tracking_number, processedcustomer_id, packages_cost, photo_url],
-      (err, results) => {
-        if (err) {
-          console.error("Error fetching data:", err.message);
-          res.status(500).json({ error: "Failed to fetch data" });
-        } else {
-          res.send("Values Edited");
-        }
-      }
+    });
+  } catch (e) {
+    // Catch errors from switchToEmployeeDB
+    console.error(
+      "Error switching DB for /deleteitem:",
+      e.msg || e.message,
+      e.err || ""
     );
-  } else {
-    const query2 =
-      "INSERT INTO `packages` (`tracking_number`, `customer_id`, `photo_url`) VALUES (?, ?, ?);";
-    db.query(
-      query2,
-      [tracking_number, processedcustomer_id, photo_url],
-      (err, results) => {
-        if (err) {
-          console.error("Error fetching data:", err.message);
-          res.status(500).json({ error: "Failed to fetch data" });
-        } else {
-          res.send("Values Edited");
-        }
-      }
-    );
+    return res
+      .status(e.status || 500)
+      .json({ error: e.msg || "DB switch failed" });
   }
 });
 
-app.post("/editpackage", (req, res) => {
-  const old_id = req.body.old_id;
-  const customer_id = req.body.customer_id;
-  const processedcustomer_id =
-    customer_id === "MISSINGITEMS" || customer_id === "" ? null : customer_id;
-  const tracking_number = req.body.tracking_number;
-  const photo_url = req.body.photo_url;
-  const query1 =
-    "UPDATE `packages` SET `tracking_number` = ?, `customer_id` = ?, `photo_url` = ? WHERE `packages`.`tracking_number` = ?;";
-  db.query(
-    query1,
-    [tracking_number, processedcustomer_id, photo_url, old_id],
-    (err, results) => {
-      if (err) {
-        console.error("Error fetching data:", err);
-        res.status(500).json({ error: "Failed to fetch data" });
-      } else {
-        res.send("Values Edited");
-      }
+// เเก้ไขต่อด้านล่าง (These routes use callbacks, consider refactoring to async/await q())
+
+app.post("/editwarehouse", async (req, res) => {
+  if (!req.body)
+    return res.status(400).json({ error: "Request body is missing" });
+  const { customer_id: id, warehouse, emp_id } = req.body;
+
+  if (!id || warehouse === undefined) {
+    return res
+      .status(400)
+      .json({ error: "customer_id and warehouse are required." });
+  }
+
+  try {
+    await switchToEmployeeDB(emp_id);
+    await q(
+      "UPDATE `customers` SET `warehouse` = ? WHERE `customers`.`customer_id` = ?;",
+      [warehouse, id]
+    );
+    res.json({ message: "Warehouse updated successfully." });
+  } catch (e) {
+    console.error("Error in /editwarehouse:", e.msg || e.message, e.err || "");
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to update warehouse." });
+  }
+});
+
+app.post("/createcus", async (req, res) => {
+  if (!req.body)
+    return res.status(400).json({ error: "Request body is missing" });
+  const { customer_id: id, contact, type, level, note, emp_id } = req.body;
+
+  if (!id || !contact) {
+    // Example: id and contact are mandatory
+    return res
+      .status(400)
+      .json({ error: "customer_id and contact are required." });
+  }
+
+  try {
+    await switchToEmployeeDB(emp_id);
+    const result = await q(
+      "INSERT INTO `customers` (`customer_id`, `contact`, `type`, `level`, `note`) VALUES (?, ?, ?, ?, ?);",
+      [id, contact, type, level, note]
+    );
+    res.json({
+      message: "Customer created successfully.",
+      customerId: id,
+      insertId: result.insertId,
+    });
+  } catch (e) {
+    console.error("Error in /createcus:", e.msg || e.message, e.err || "");
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to create customer." });
+  }
+});
+
+app.post("/editcus", async (req, res) => {
+  if (!req.body)
+    return res.status(400).json({ error: "Request body is missing" });
+  const {
+    old_id,
+    customer_id: id,
+    contact,
+    type,
+    level,
+    note,
+    emp_id,
+  } = req.body;
+
+  if (!old_id || !id || !contact) {
+    // Example: old_id, new id, and contact are mandatory
+    return res
+      .status(400)
+      .json({ error: "old_id, customer_id, and contact are required." });
+  }
+
+  try {
+    await switchToEmployeeDB(emp_id);
+    await q(
+      "UPDATE customers SET customer_id = ?, contact = ?, type = ?, level = ?, note = ? WHERE customer_id = ?;",
+      [id, contact, type, level, note, old_id]
+    );
+    res.json({ message: "Customer edited successfully." });
+  } catch (e) {
+    console.error("Error in /editcus:", e.msg || e.message, e.err || "");
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to edit customer." });
+  }
+});
+
+app.post("/addaddr", async (req, res) => {
+  if (!req.body)
+    return res.status(400).json({ error: "Request body is missing" });
+  const {
+    customer_id,
+    recipient_name,
+    phone,
+    address,
+    city,
+    state,
+    country,
+    zipcode,
+    email,
+    emp_id,
+  } = req.body;
+
+  if (
+    !customer_id ||
+    !recipient_name ||
+    !address ||
+    !city ||
+    !country ||
+    !zipcode
+  ) {
+    return res.status(400).json({ error: "Missing required address fields." });
+  }
+
+  try {
+    await switchToEmployeeDB(emp_id);
+    const result = await q(
+      "INSERT INTO `addresses` (`customer_id`, `recipient_name`, `phone`, `address`, `city`, `state`, `country`, `zipcode`, `email`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);",
+      [
+        customer_id,
+        recipient_name,
+        phone,
+        address,
+        city,
+        state,
+        country,
+        zipcode,
+        email,
+      ]
+    );
+    res.json({
+      message: "Address added successfully.",
+      addressId: result.insertId,
+    });
+  } catch (e) {
+    console.error("Error in /addaddr:", e.msg || e.message, e.err || "");
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to add address." });
+  }
+});
+
+app.post("/editaddr", async (req, res) => {
+  if (!req.body)
+    return res.status(400).json({ error: "Request body is missing" });
+  const {
+    address_id,
+    recipient_name,
+    phone,
+    address,
+    city,
+    state,
+    country,
+    zipcode,
+    emp_id,
+  } = req.body;
+
+  if (
+    !address_id ||
+    !recipient_name ||
+    !address ||
+    !city ||
+    !country ||
+    !zipcode
+  ) {
+    return res
+      .status(400)
+      .json({ error: "Missing required address fields for editing." });
+  }
+
+  try {
+    await switchToEmployeeDB(emp_id);
+    await q(
+      "UPDATE `addresses` SET `recipient_name` = ?, `phone` = ?, `address` = ?, `city` = ?, `state` = ?, `country` = ?, `zipcode` = ? WHERE `address_id` = ?;",
+      [
+        recipient_name,
+        phone,
+        address,
+        city,
+        state,
+        country,
+        zipcode,
+        address_id,
+      ]
+    );
+    res.json({ message: "Address edited successfully." });
+  } catch (e) {
+    console.error("Error in /editaddr:", e.msg || e.message, e.err || "");
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to edit address." });
+  }
+});
+
+app.post("/deleteaddr", async (req, res) => {
+  if (!req.body)
+    return res.status(400).json({ error: "Request body is missing" });
+  const { address_id, emp_id } = req.body;
+
+  if (!address_id) {
+    return res.status(400).json({ error: "address_id is required." });
+  }
+
+  try {
+    await switchToEmployeeDB(emp_id);
+    const result = await q(
+      "DELETE FROM addresses WHERE `addresses`.`address_id` = ?;",
+      [address_id]
+    );
+    if (result.affectedRows === 0) {
+      return res
+        .status(404)
+        .json({ error: "Address not found or already deleted." });
     }
-  );
+    res.json({ message: "Address deleted successfully." });
+  } catch (e) {
+    console.error("Error in /deleteaddr:", e.msg || e.message, e.err || "");
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to delete address." });
+  }
+});
+
+app.post("/addpackage", async (req, res) => {
+  if (!req.body)
+    return res.status(400).json({ error: "Request body is missing" });
+  const { customer_id, tracking_number, photo_url, packages_cost, emp_id } =
+    req.body;
+
+  if (!tracking_number) {
+    // tracking_number is essential
+    return res.status(400).json({ error: "tracking_number is required." });
+  }
+  const processedcustomer_id =
+    customer_id === "MISSINGITEMS" ||
+    customer_id === "" ||
+    customer_id === undefined
+      ? null
+      : customer_id;
+
+  try {
+    await switchToEmployeeDB(emp_id);
+    let sql, params;
+    if (packages_cost !== undefined) {
+      sql =
+        "INSERT INTO `packages` (`tracking_number`, `customer_id`, `packages_cost`, `photo_url`) VALUES (?, ?, ?, ?);";
+      params = [
+        tracking_number,
+        processedcustomer_id,
+        Number(packages_cost) || 0,
+        photo_url || null,
+      ];
+    } else {
+      sql =
+        "INSERT INTO `packages` (`tracking_number`, `customer_id`, `photo_url`) VALUES (?, ?, ?);";
+      params = [tracking_number, processedcustomer_id, photo_url || null];
+    }
+    await q(sql, params);
+    res.json({ message: "Package added successfully." });
+  } catch (e) {
+    console.error("Error in /addpackage:", e.msg || e.message, e.err || "");
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to add package." });
+  }
+});
+
+app.post("/editpackage", async (req, res) => {
+  if (!req.body)
+    return res.status(400).json({ error: "Request body is missing" });
+  const { old_id, customer_id, tracking_number, photo_url, emp_id } = req.body;
+
+  if (!old_id || !tracking_number) {
+    return res
+      .status(400)
+      .json({
+        error:
+          "old_id (original tracking number) and new tracking_number are required.",
+      });
+  }
+  const processedcustomer_id =
+    customer_id === "MISSINGITEMS" ||
+    customer_id === "" ||
+    customer_id === undefined
+      ? null
+      : customer_id;
+
+  try {
+    await switchToEmployeeDB(emp_id);
+    await q(
+      "UPDATE `packages` SET `tracking_number` = ?, `customer_id` = ?, `photo_url` = ? WHERE `packages`.`tracking_number` = ?;",
+      [tracking_number, processedcustomer_id, photo_url || null, old_id]
+    );
+    res.json({ message: "Package edited successfully." });
+  } catch (e) {
+    console.error("Error in /editpackage:", e.msg || e.message, e.err || "");
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to edit package." });
+  }
 });
 
 app.post("/deletepackage", async (req, res) => {
-  // <--- ทำให้เป็น async
-  const { customer_id, tracking } = req.body;
+  if (!req.body)
+    return res.status(400).json({ error: "Request body is missing" });
+  const { customer_id, tracking, emp_id } = req.body;
 
   if (!tracking) {
     return res
@@ -905,1057 +1159,1283 @@ app.post("/deletepackage", async (req, res) => {
       .json({ error: "Tracking number (tracking) is required" });
   }
 
-  db.beginTransaction(async (txErr) => {
-    // <--- ทำให้ callback ของ transaction เป็น async
-    if (txErr) {
-      console.error("Transaction start error:", txErr.message);
-      return res.status(500).json({ error: "Transaction error" });
-    }
-
-    try {
-      // 1. ดึง photo_url ของ package
-      const [packageData] = await q(
-        "SELECT photo_url FROM packages WHERE tracking_number = ?",
-        [tracking]
-      );
-      if (packageData && packageData.photo_url) {
-        const packageS3Key = extractS3KeyFromUrl(packageData.photo_url);
-        if (packageS3Key) {
-          await deleteS3Object(packageS3Key); // <--- ลบรูป package จาก S3
-        }
+  try {
+    await switchToEmployeeDB(emp_id);
+    db.beginTransaction(async (txErr) => {
+      if (txErr) {
+        console.error(
+          "Transaction start error in /deletepackage:",
+          txErr.message
+        );
+        return res
+          .status(500)
+          .json({ error: "Transaction error", details: txErr.message });
       }
 
-      // 2. ดึง item ทั้งหมดที่เกี่ยวข้องกับ package นี้และ photo_url ของพวกมัน
-      const itemsInPackage = await q(
-        "SELECT item_id, photo_url FROM items WHERE tracking_number = ?",
-        [tracking]
-      );
-      for (const item of itemsInPackage) {
-        if (item.photo_url) {
-          const itemS3Key = extractS3KeyFromUrl(item.photo_url);
-          if (itemS3Key) {
-            await deleteS3Object(itemS3Key); // <--- ลบรูป item จาก S3
+      try {
+        const [packageData] = await q(
+          "SELECT photo_url FROM packages WHERE tracking_number = ?",
+          [tracking]
+        );
+        if (packageData && packageData.photo_url) {
+          const packageS3Key = extractS3KeyFromUrl(packageData.photo_url);
+          if (packageS3Key) await deleteS3Object(packageS3Key);
+        }
+
+        const itemsInPackage = await q(
+          "SELECT item_id, photo_url FROM items WHERE tracking_number = ?",
+          [tracking]
+        );
+        for (const item of itemsInPackage) {
+          if (item.photo_url) {
+            const itemS3Key = extractS3KeyFromUrl(item.photo_url);
+            if (itemS3Key) await deleteS3Object(itemS3Key);
           }
         }
-      }
 
-      // 3. ลบ items ออกจาก DB
-      // Query เดิมคือ "DELETE FROM items WHERE `tracking_number` = ? AND item_status = 0;"
-      // ถ้าลบ package ควรลบ item ทั้งหมดของ package นั้น ไม่ว่า status จะเป็นอะไร
-      await q("DELETE FROM items WHERE tracking_number = ?", [tracking]);
-
-      // 4. ลบ package ออกจาก DB
-      await q("DELETE FROM packages WHERE tracking_number = ?", [tracking]);
-
-      // 5. อัปเดต status ของลูกค้า (ถ้ามีการส่ง customer_id มา)
-      let message = "Package and associated items deleted.";
-      if (customer_id) {
-        const [{ count }] = await q(
-          `SELECT COUNT(*) AS count
-           FROM items i
-           JOIN packages p ON i.tracking_number = p.tracking_number
-           WHERE p.customer_id = ? AND i.item_status = 0`,
-          [customer_id]
+        await q("DELETE FROM items WHERE tracking_number = ?", [tracking]);
+        const packageDeleteResult = await q(
+          "DELETE FROM packages WHERE tracking_number = ?",
+          [tracking]
         );
 
-        if (count === 0) {
-          await q(
-            "UPDATE customers SET status = NULL WHERE customer_id = ? AND status != 'Unpaid'",
+        if (packageDeleteResult.affectedRows === 0) {
+          // Package not found, or already deleted.
+          console.warn(
+            `Package with tracking ${tracking} not found for deletion or already deleted.`
+          );
+        }
+
+        let message = "Package and associated items deleted successfully.";
+        if (customer_id) {
+          const [{ count }] = await q(
+            `SELECT COUNT(*) AS count
+             FROM items i
+             JOIN packages p ON i.tracking_number = p.tracking_number
+             WHERE p.customer_id = ? AND i.item_status = 0`,
             [customer_id]
           );
-          message =
-            "Package and items deleted. Customer Status Updated to NULL.";
-        }
-      }
 
-      db.commit((commitErr) => {
-        if (commitErr) {
-          console.error("Commit error:", commitErr.message);
-          return db.rollback(() =>
-            res.status(500).json({ error: "Failed to commit transaction" })
-          );
+          if (count === 0) {
+            await q(
+              "UPDATE customers SET status = NULL WHERE customer_id = ? AND (status = 'Warehouse' OR status IS NULL)",
+              [customer_id]
+            );
+            message =
+              "Package and items deleted. Customer status potentially updated.";
+          }
         }
-        res.send(message);
-      });
-    } catch (err) {
-      console.error("Delete package error:", err.message);
-      db.rollback(() =>
-        res
-          .status(500)
-          .json({ error: "Failed to delete package and associated data" })
-      );
-    }
-  });
+
+        db.commit((commitErr) => {
+          if (commitErr) {
+            console.error("Commit error in /deletepackage:", commitErr.message);
+            return db.rollback(() =>
+              res
+                .status(500)
+                .json({
+                  error: "Failed to commit transaction",
+                  details: commitErr.message,
+                })
+            );
+          }
+          res.json({ message });
+        });
+      } catch (err) {
+        console.error("Error during /deletepackage transaction:", err.message);
+        db.rollback(() =>
+          res
+            .status(500)
+            .json({
+              error: "Failed to delete package and associated data",
+              details: err.message,
+            })
+        );
+      }
+    });
+  } catch (e) {
+    console.error(
+      "Error switching DB for /deletepackage:",
+      e.msg || e.message,
+      e.err || ""
+    );
+    return res
+      .status(e.status || 500)
+      .json({ error: e.msg || "DB switch failed" });
+  }
 });
 
 // SubBox -------------------------------------------------------------------------------------------------------------------
-app.get("/remainboxitem", (req, res) => {
-  // ดึงค่า box_id จาก query parameter
-  const { box_id } = req.query;
-  // เปลี่ยนเงื่อนไขใน SQL ให้ตรงกับ box_id
-  const query =
-    "SELECT bi.*, bi.quantity - COALESCE(SUM(sbi.sub_quantity), 0) AS remaining_quantity, bi.weight * (bi.quantity - COALESCE(SUM(sbi.sub_quantity), 0)) / bi.quantity AS adjusted_weight FROM items bi LEFT JOIN subbox sb ON bi.box_id = sb.box_id LEFT JOIN subbox_item sbi ON sb.subbox_id = sbi.subbox_id AND bi.item_id = sbi.item_id WHERE bi.box_id = ? GROUP BY bi.item_id HAVING remaining_quantity != 0;";
-  db.query(query, [box_id], (err, results) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    } else {
-      res.json(results);
-    }
-  });
+// Refactored to use async/await and q helper
+app.get("/remainboxitem", async (req, res) => {
+  const { box_id, emp_id } = req.query;
+  if (!box_id) {
+    return res.status(400).json({ error: "box_id is required." });
+  }
+  const query = `SELECT bi.*, 
+            bi.quantity - COALESCE(SUM(sbi.sub_quantity), 0) AS remaining_quantity, 
+            CASE 
+                WHEN bi.quantity = 0 THEN 0  -- Avoid division by zero
+                ELSE bi.weight * (bi.quantity - COALESCE(SUM(sbi.sub_quantity), 0)) / bi.quantity 
+            END AS adjusted_weight 
+     FROM items bi 
+     LEFT JOIN subbox sb ON bi.box_id = sb.box_id 
+     LEFT JOIN subbox_item sbi ON sb.subbox_id = sbi.subbox_id AND bi.item_id = sbi.item_id 
+     WHERE bi.box_id = ? 
+     GROUP BY bi.item_id, bi.quantity, bi.weight /* Added all non-aggregated columns from SELECT to GROUP BY */
+     HAVING remaining_quantity != 0;`;
+  try {
+    await switchToEmployeeDB(emp_id);
+    const results = await q(query, [box_id]);
+    res.json(results);
+  } catch (e) {
+    console.error("Error in /remainboxitem:", e.msg || e.message, e.err || "");
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to fetch remaining box items." });
+  }
 });
 
-app.get("/itemsubbox", (req, res) => {
-  const { subbox_id } = req.query;
-  const query =
-    "SELECT *, i.weight * sbi.sub_quantity / i.quantity AS adjusted_weight FROM `subbox_item` sbi LEFT JOIN items i ON sbi.item_id = i.item_id WHERE `subbox_id` = ?;";
-  db.query(query, [subbox_id], (err, results) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    } else {
-      res.json(results);
-    }
-  });
+app.get("/itemsubbox", async (req, res) => {
+  const { subbox_id, emp_id } = req.query;
+  if (!subbox_id) {
+    return res.status(400).json({ error: "subbox_id is required." });
+  }
+  const query = `SELECT sbi.*, i.item_name, i.item_type, i.item_subtype, i.packer_id, i.photo_url, i.box_id, i.item_status, i.Date_create,
+            CASE 
+                WHEN i.quantity = 0 THEN 0 
+                ELSE i.weight * sbi.sub_quantity / i.quantity 
+            END AS adjusted_weight 
+     FROM subbox_item sbi 
+     LEFT JOIN items i ON sbi.item_id = i.item_id 
+     WHERE sbi.subbox_id = ?;`;
+  try {
+    await switchToEmployeeDB(emp_id);
+    const results = await q(query, [subbox_id]);
+    res.json(results);
+  } catch (e) {
+    console.error("Error in /itemsubbox:", e.msg || e.message, e.err || "");
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to fetch item subbox details." });
+  }
 });
 
-app.post("/edititemsubbox", (req, res) => {
-  const subbox_id = req.body.subbox_id;
-  const items = req.body.items;
-  const query =
-    "UPDATE `subbox_item` SET `sub_quantity` = ? WHERE `subbox_item`.`subbox_id` = ? AND `subbox_item`.`item_id` = ?;";
-  const deleteQuery =
-    "DELETE FROM `subbox_item` WHERE `subbox_item`.`subbox_id` = ? AND `subbox_item`.`item_id` = ?;";
-  const promises = Object.entries(items).map(([item_id, sub_quantity]) => {
-    return new Promise((resolve, reject) => {
-      if (sub_quantity === 0) {
-        // Perform DELETE if sub_quantity is 0
-        db.query(deleteQuery, [subbox_id, item_id], (err, results) => {
-          if (err) {
-            console.error("Error deleting data:", err.message);
-            return reject(err);
-          }
-          resolve({ action: "deleted", item_id });
-        });
-      } else {
-        db.query(query, [sub_quantity, subbox_id, item_id], (err, results) => {
-          if (err) {
-            console.error("Error updating data:", err.message);
-            return reject(err);
-          }
-          resolve(results);
-        });
-      }
-    });
-  });
+app.post("/edititemsubbox", async (req, res) => {
+  if (!req.body)
+    return res.status(400).json({ error: "Request body is missing" });
+  const { subbox_id, items, emp_id } = req.body;
 
-  Promise.all(promises)
-    .then((results) => {
-      res.json({ message: "All items updated successfully", results });
-    })
-    .catch((error) => {
-      console.error("Error during batch update:", error.message);
-      res.status(500).json({ error: "Failed to update items" });
-    });
-});
+  if (
+    !subbox_id ||
+    typeof items !== "object" ||
+    items === null ||
+    Array.isArray(items)
+  ) {
+    return res
+      .status(400)
+      .json({ error: "subbox_id and items (as an object) are required." });
+  }
 
-app.get("/subboxinfo", (req, res) => {
-  // ดึงค่า box_id จาก query parameter
-  const { subbox_id } = req.query;
-  // เปลี่ยนเงื่อนไขใน SQL ให้ตรงกับ box_id
-  const query = "SELECT * FROM `subbox` WHERE `subbox_id` = ?;";
-  db.query(query, [subbox_id], (err, results) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    } else {
-      res.json(results);
-    }
-  });
-});
+  try {
+    await switchToEmployeeDB(emp_id);
+    const updateQuery =
+      "UPDATE `subbox_item` SET `sub_quantity` = ? WHERE `subbox_id` = ? AND `item_id` = ?;";
+    const deleteQuery =
+      "DELETE FROM `subbox_item` WHERE `subbox_id` = ? AND `item_id` = ?;";
 
-app.post("/addsubbox", (req, res) => {
-  const box_id = req.body.box_id;
-  const weight = req.body.weight;
-  const width = req.body.width;
-  const b_long = req.body.b_long;
-  const height = req.body.height;
-  const img_url = req.body.img_url;
-  const items = req.body.items;
-  const query1 =
-    "INSERT INTO `subbox` (`box_id`, `weight`, `width`, `b_long`, `height`, `img_url`) VALUES (?, ?, ?, ?, ?, ?);";
-  db.query(
-    query1,
-    [box_id, weight, width, b_long, height, img_url],
-    (err, results) => {
-      if (err) {
-        console.error("Error fetching data:", err.message);
-        res.status(500).json({ error: "Failed to fetch data" });
-      } else {
-        const subboxId = results.insertId;
-        const values = items.map((item) => [
-          subboxId,
-          item.item_id,
-          item.selectedQuantity === 0
-            ? item.remaining_quantity
-            : item.selectedQuantity,
-        ]);
-        if (values.length > 0) {
-          const query2 =
-            "INSERT INTO `subbox_item` (`subbox_id`, `item_id`, `sub_quantity`) VALUES ?;";
-          db.query(query2, [values], (err, results) => {
-            if (err) {
-              console.error("Error in second query:", err.message);
-              res.status(500).json({ error: "Failed to execute second query" });
-            } else {
-              res.json({ message: "Values inserted successfully", subboxId });
-            }
-          });
+    const promises = Object.entries(items).map(
+      async ([item_id, sub_quantity_val]) => {
+        const sub_quantity = Number(sub_quantity_val);
+        if (isNaN(sub_quantity)) {
+          throw new Error(
+            `Invalid sub_quantity for item_id ${item_id}: ${sub_quantity_val}`
+          );
+        }
+        if (sub_quantity === 0) {
+          await q(deleteQuery, [subbox_id, item_id]);
+          return { action: "deleted", item_id };
         } else {
-          res.json({ message: "Values inserted successfully", subboxId });
+          await q(updateQuery, [sub_quantity, subbox_id, item_id]);
+          return { action: "updated", item_id, sub_quantity };
         }
       }
-    }
-  );
+    );
+
+    const results = await Promise.all(promises);
+    res.json({ message: "All items updated successfully", results });
+  } catch (e) {
+    console.error("Error in /edititemsubbox:", e.msg || e.message, e.err || "");
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to update subbox items." });
+  }
 });
 
-app.post("/editsubbox", (req, res) => {
-  const subbox_id = req.body.subbox_id;
-  const weight = req.body.weight;
-  const width = req.body.width;
-  const b_long = req.body.b_long;
-  const height = req.body.height;
-  const img_url = req.body.img_url;
-  const query1 =
-    "UPDATE `subbox` SET `weight` = ?, `width` = ?, `b_long` = ?, `height` = ?, `img_url` = ? WHERE `subbox`.`subbox_id` = ?;";
-  db.query(
-    query1,
-    [weight, width, b_long, height, img_url, subbox_id],
-    (err, results) => {
-      if (err) {
-        console.error("Error fetching data:", err.message);
-        res.status(500).json({ error: "Failed to fetch data" });
-      } else {
-        res.send("Values Edited");
-      }
+app.get("/subboxinfo", async (req, res) => {
+  const { subbox_id, emp_id } = req.query;
+  if (!subbox_id) {
+    return res.status(400).json({ error: "subbox_id is required." });
+  }
+  const query = "SELECT * FROM `subbox` WHERE `subbox_id` = ?;";
+  try {
+    await switchToEmployeeDB(emp_id);
+    const results = await q(query, [subbox_id]);
+    if (results.length === 0) {
+      return res.status(404).json({ error: "Subbox info not found." });
     }
-  );
+    res.json(results[0]); // Send single object
+  } catch (e) {
+    console.error("Error in /subboxinfo:", e.msg || e.message, e.err || "");
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to fetch subbox info." });
+  }
 });
 
-app.post("/editsubbox_track", (req, res) => {
-  const subbox_id = req.body.subbox_id;
-  const subbox_tracking = req.body.subbox_tracking;
-  const subbox_cost = req.body.subbox_cost;
-  const query1 =
-    "UPDATE `subbox` SET `subbox_tracking` = ?, `subbox_cost` = ? WHERE `subbox_id` = ?";
-  const updates = subbox_id.map((id, index) => {
-    console.log([subbox_tracking[index], subbox_cost[index], id.subbox_id]);
-    return new Promise((resolve, reject) => {
-      db.query(
-        query1,
-        [subbox_tracking[index], subbox_cost[index], id.subbox_id],
-        (err, results) => {
-          if (err) {
-            reject(err);
-          } else {
-            resolve(results);
-          }
-        }
-      );
-    });
-  });
+app.post("/addsubbox", async (req, res) => {
+  if (!req.body)
+    return res.status(400).json({ error: "Request body is missing" });
+  const { box_id, weight, width, b_long, height, img_url, items, emp_id } =
+    req.body;
 
-  Promise.all(updates)
-    .then(() => {
-      res.send("All values edited successfully");
-    })
-    .catch((err) => {
-      console.error("Error updating data:", err.message);
-      res.status(500).json({ error: "Failed to update data" });
-    });
-});
+  if (!box_id || !Array.isArray(items)) {
+    return res
+      .status(400)
+      .json({ error: "box_id and items array are required." });
+  }
+  // Add more validation for numeric fields if necessary
 
-app.post("/deletesubbox", (req, res) => {
-  const subbox_id = req.body.subbox_id;
-  const queryDeleteSubboxItem =
-    "DELETE FROM subbox_item WHERE `subbox_item`.`subbox_id` = ?;";
-  const queryDeleteSubbox =
-    "DELETE FROM subbox WHERE `subbox`.`subbox_id` = ?;";
-  db.query(queryDeleteSubboxItem, [subbox_id], (err, results) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    }
-    db.query(queryDeleteSubbox, [subbox_id], (err, results) => {
-      if (err) {
-        console.error("Error deleting subbox:", err.message);
-        return res.status(500).json({ error: "Failed to delete subbox" });
-      }
-      // Send success response
-      res.status(200).json({
-        success: true,
-        message: "Subbox and associated items deleted successfully",
+  try {
+    await switchToEmployeeDB(emp_id);
+    const query1 =
+      "INSERT INTO `subbox` (`box_id`, `weight`, `width`, `b_long`, `height`, `img_url`) VALUES (?, ?, ?, ?, ?, ?);";
+    const result1 = await q(query1, [
+      box_id,
+      Number(weight) || 0,
+      Number(width) || 0,
+      Number(b_long) || 0,
+      Number(height) || 0,
+      img_url || null,
+    ]);
+    const subboxId = result1.insertId;
+
+    if (items.length > 0) {
+      const values = items.map((item) => {
+        if (!item || item.item_id === undefined)
+          throw new Error("Invalid item structure in items array.");
+        const quantity = Number(item.selectedQuantity);
+        const remaining = Number(item.remaining_quantity);
+        return [subboxId, item.item_id, quantity === 0 ? remaining : quantity];
       });
-    });
-  });
+      const query2 =
+        "INSERT INTO `subbox_item` (`subbox_id`, `item_id`, `sub_quantity`) VALUES ?;";
+      await q(query2, [values]);
+    }
+    res.json({ message: "Subbox and items added successfully", subboxId });
+  } catch (e) {
+    console.error("Error in /addsubbox:", e.msg || e.message, e.err || "");
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to add subbox." });
+  }
 });
 
-app.post("/addsubboxitem", (req, res) => {
-  const items = req.body.items;
-  const subbox_id = req.body.subbox_id;
-  const values = items.map((item) => [
-    subbox_id,
-    item.item_id,
-    item.quantity === 0 ? item.remaining_quantity : item.quantity,
-  ]);
-  const query2 =
-    "INSERT INTO subbox_item (subbox_id, item_id, sub_quantity) VALUES ? ON DUPLICATE KEY UPDATE sub_quantity = sub_quantity + VALUES(sub_quantity);";
-  db.query(query2, [values], (err, results) => {
-    if (err) {
-      console.error("Error in second query:", err.message);
-      res.status(500).json({ error: "Failed to execute second query" });
-    } else {
-      res.send("Values Edited");
-    }
-  });
+app.post("/editsubbox", async (req, res) => {
+  if (!req.body)
+    return res.status(400).json({ error: "Request body is missing" });
+  const { subbox_id, weight, width, b_long, height, img_url, emp_id } =
+    req.body;
+
+  if (!subbox_id) {
+    return res.status(400).json({ error: "subbox_id is required." });
+  }
+
+  try {
+    await switchToEmployeeDB(emp_id);
+    const query1 =
+      "UPDATE `subbox` SET `weight` = ?, `width` = ?, `b_long` = ?, `height` = ?, `img_url` = ? WHERE `subbox_id` = ?;";
+    await q(query1, [
+      Number(weight) || 0,
+      Number(width) || 0,
+      Number(b_long) || 0,
+      Number(height) || 0,
+      img_url || null,
+      subbox_id,
+    ]);
+    res.json({ message: "Subbox edited successfully." });
+  } catch (e) {
+    console.error("Error in /editsubbox:", e.msg || e.message, e.err || "");
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to edit subbox." });
+  }
+});
+
+app.post("/editsubbox_track", async (req, res) => {
+  if (!req.body)
+    return res.status(400).json({ error: "Request body is missing" });
+  const {
+    subbox_id: subboxIds,
+    subbox_tracking,
+    subbox_cost,
+    emp_id,
+  } = req.body; // Renamed subbox_id to subboxIds for clarity
+
+  if (
+    !Array.isArray(subboxIds) ||
+    !Array.isArray(subbox_tracking) ||
+    !Array.isArray(subbox_cost)
+  ) {
+    return res
+      .status(400)
+      .json({
+        error: "subbox_id, subbox_tracking, and subbox_cost must be arrays.",
+      });
+  }
+  if (
+    subboxIds.length !== subbox_tracking.length ||
+    subboxIds.length !== subbox_cost.length
+  ) {
+    return res
+      .status(400)
+      .json({ error: "Input arrays must have the same length." });
+  }
+
+  try {
+    await switchToEmployeeDB(emp_id);
+    const query1 =
+      "UPDATE `subbox` SET `subbox_tracking` = ?, `subbox_cost` = ? WHERE `subbox_id` = ?";
+
+    const updates = subboxIds.map((idObj, index) => {
+      // Assuming idObj is like { subbox_id: value } from original console.log
+      const currentSubboxId =
+        idObj && idObj.subbox_id !== undefined ? idObj.subbox_id : idObj;
+      if (currentSubboxId === undefined || currentSubboxId === null) {
+        throw new Error(`Invalid subbox_id at index ${index}`);
+      }
+      return q(query1, [
+        subbox_tracking[index] || null,
+        Number(subbox_cost[index]) || 0,
+        currentSubboxId,
+      ]);
+    });
+
+    await Promise.all(updates);
+    res.json({ message: "All subbox tracking info edited successfully." });
+  } catch (e) {
+    console.error(
+      "Error in /editsubbox_track:",
+      e.msg || e.message,
+      e.err || ""
+    );
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to update subbox tracking info." });
+  }
+});
+
+app.post("/deletesubbox", async (req, res) => {
+  if (!req.body)
+    return res.status(400).json({ error: "Request body is missing" });
+  const { subbox_id, emp_id } = req.body;
+
+  if (!subbox_id) {
+    return res.status(400).json({ error: "subbox_id is required." });
+  }
+
+  try {
+    await switchToEmployeeDB(emp_id);
+    db.beginTransaction(async (txErr) => {
+      if (txErr) {
+        console.error(
+          "Transaction start error in /deletesubbox:",
+          txErr.message
+        );
+        return res
+          .status(500)
+          .json({ error: "Transaction error", details: txErr.message });
+      }
+      try {
+        await q("DELETE FROM subbox_item WHERE `subbox_id` = ?;", [subbox_id]);
+        const subboxDeleteResult = await q(
+          "DELETE FROM subbox WHERE `subbox_id` = ?;",
+          [subbox_id]
+        );
+
+        if (subboxDeleteResult.affectedRows === 0) {
+          console.warn(
+            `Subbox with id ${subbox_id} not found for deletion or already deleted. Still committing item deletions.`
+          );
+        }
+
+        db.commit((commitErr) => {
+          if (commitErr) {
+            console.error("Commit error in /deletesubbox:", commitErr.message);
+            return db.rollback(() =>
+              res
+                .status(500)
+                .json({ error: "Commit failed", details: commitErr.message })
+            );
+          }
+          res.json({
+            success: true,
+            message: "Subbox and associated items deleted successfully",
+          });
+        });
+      } catch (err) {
+        console.error("Error during /deletesubbox transaction:", err.message);
+        db.rollback(() =>
+          res
+            .status(500)
+            .json({ error: "Failed to delete subbox", details: err.message })
+        );
+      }
+    });
+  } catch (e) {
+    console.error(
+      "Error switching DB for /deletesubbox:",
+      e.msg || e.message,
+      e.err || ""
+    );
+    return res
+      .status(e.status || 500)
+      .json({ error: e.msg || "DB switch failed" });
+  }
+});
+
+app.post("/addsubboxitem", async (req, res) => {
+  if (!req.body)
+    return res.status(400).json({ error: "Request body is missing" });
+  const { items, subbox_id, emp_id } = req.body;
+
+  if (!subbox_id || !Array.isArray(items) || items.length === 0) {
+    return res
+      .status(400)
+      .json({ error: "subbox_id and a non-empty items array are required." });
+  }
+
+  try {
+    await switchToEmployeeDB(emp_id);
+    const values = items.map((item) => {
+      if (
+        !item ||
+        item.item_id === undefined ||
+        item.quantity === undefined ||
+        item.remaining_quantity === undefined
+      ) {
+        throw new Error(
+          "Invalid item structure in items array. Each item needs item_id, quantity, and remaining_quantity."
+        );
+      }
+      const quantity = Number(item.quantity);
+      const remaining = Number(item.remaining_quantity);
+      return [subbox_id, item.item_id, quantity === 0 ? remaining : quantity];
+    });
+
+    // ON DUPLICATE KEY UPDATE is MySQL specific.
+    const query =
+      "INSERT INTO subbox_item (subbox_id, item_id, sub_quantity) VALUES ? ON DUPLICATE KEY UPDATE sub_quantity = sub_quantity + VALUES(sub_quantity);";
+    await q(query, [values]);
+    res.json({ message: "Subbox items added/updated successfully." });
+  } catch (e) {
+    console.error("Error in /addsubboxitem:", e.msg || e.message, e.err || "");
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to add/update subbox items." });
+  }
 });
 
 // Box -------------------------------------------------------------------------------------------------------------------
-app.get("/box", (req, res) => {
-  const { box_id } = req.query;
-  const query = "SELECT * FROM box WHERE box_id = ?;";
-  db.query(query, [box_id], (err, results) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    } else {
-      res.json(results);
+// These routes are more complex and involve multiple queries or specific logic.
+// They have been refactored to use async/await and include more robust error handling and input validation.
+
+app.get("/box", async (req, res) => {
+  const { box_id, emp_id } = req.query;
+  if (!box_id) {
+    return res.status(400).json({ error: "box_id is required." });
+  }
+  try {
+    await switchToEmployeeDB(emp_id);
+    const results = await q("SELECT * FROM box WHERE box_id = ?;", [box_id]);
+    if (results.length === 0) {
+      return res.status(404).json({ error: "Box not found." });
     }
-  });
+    res.json(results[0]); // Send single object
+  } catch (e) {
+    console.error("Error in /box:", e.msg || e.message, e.err || "");
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to fetch box details." });
+  }
 });
 
-app.post("/addbox", (req, res) => {
-  // ดึงค่า box_id จาก query parameter
-  const sender = req.body.submissionData.sender;
-  const recipients = req.body.submissionData.recipients;
-  const note = req.body.submissionData.note;
-  const packages = req.body.submissionData.packages;
-  // เปลี่ยนเงื่อนไขใน SQL ให้ตรงกับ box_id
-  const now = new Date();
-  const year = now.getFullYear();
-  const month = String(now.getMonth() + 1).padStart(2, "0"); // เดือนเริ่มจาก 0
-  const day = String(now.getDate()).padStart(2, "0");
-  const date = `${year}-${month}-${day}`;
-  const hours = String(now.getHours()).padStart(2, "0");
-  const minutes = String(now.getMinutes()).padStart(2, "0");
-  const seconds = String(now.getSeconds()).padStart(2, "0");
-  const time = `${hours}:${minutes}:${seconds}`;
+app.post("/addbox", async (req, res) => {
+  if (!req.body || !req.body.submissionData) {
+    return res
+      .status(400)
+      .json({ error: "Request body with submissionData is missing." });
+  }
+  const { sender, recipients, note, packages } = req.body.submissionData;
+  const { emp_id } = req.body; // emp_id for DB switch
 
-  // สร้าง box_id
+  if (!sender || !recipients || !Array.isArray(packages)) {
+    return res
+      .status(400)
+      .json({
+        error:
+          "Missing required fields in submissionData: sender, recipients, or packages array.",
+      });
+  }
+
+  const now = new Date();
+  const date = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(
+    2,
+    "0"
+  )}-${String(now.getDate()).padStart(2, "0")}`;
+  const time = `${String(now.getHours()).padStart(2, "0")}${String(
+    now.getMinutes()
+  ).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}`; // HHMMSS for uniqueness
   const box_id = `${sender}_${date}T${time}`;
-  const query =
-    "INSERT INTO `box` (`box_id`, `customer_id`, `address_id`, `note`) VALUES (?, ?, ?, ?)";
-  db.query(query, [box_id, sender, recipients, note], (err, results) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    } else {
-      const boxId = box_id;
-      const promises = [];
-      packages.forEach((pkg) => {
-        pkg.items.forEach((item) => {
-          const updateQuery =
-            "UPDATE `items` SET `box_id` = ?, `item_status` = ? WHERE `item_id` = ?";
-          const promise = new Promise((resolve, reject) => {
-            db.query(updateQuery, [boxId, 1, item.item_id], (err) => {
-              if (err) {
-                console.error("Error updating item:", err.message);
-                reject(err);
-              } else {
-                resolve();
+
+  try {
+    await switchToEmployeeDB(emp_id);
+    db.beginTransaction(async (txErr) => {
+      if (txErr) {
+        console.error("Transaction start error in /addbox:", txErr.message);
+        return res
+          .status(500)
+          .json({ error: "Transaction error", details: txErr.message });
+      }
+      try {
+        await q(
+          "INSERT INTO `box` (`box_id`, `customer_id`, `address_id`, `note`) VALUES (?, ?, ?, ?)",
+          [box_id, sender, recipients, note || null]
+        );
+
+        const itemUpdatePromises = [];
+        packages.forEach((pkg) => {
+          if (pkg && Array.isArray(pkg.items)) {
+            pkg.items.forEach((item) => {
+              if (item && item.item_id !== undefined) {
+                itemUpdatePromises.push(
+                  q(
+                    "UPDATE `items` SET `box_id` = ?, `item_status` = 1 WHERE `item_id` = ?",
+                    [box_id, item.item_id]
+                  )
+                );
               }
             });
-          });
-          promises.push(promise);
-        });
-      });
-
-      const updateCustomerQuery =
-        "UPDATE `customers` SET `packages` = `packages` + 1 WHERE `customer_id` = ?";
-      const customerUpdatePromise = new Promise((resolve, reject) => {
-        db.query(updateCustomerQuery, [sender], (err) => {
-          if (err) {
-            console.error(
-              "Error updating customer packages count:",
-              err.message
-            );
-            reject(err);
-          } else {
-            resolve();
           }
         });
-      });
+        await Promise.all(itemUpdatePromises);
+        await q(
+          "UPDATE `customers` SET `packages` = `packages` + 1 WHERE `customer_id` = ?",
+          [sender]
+        );
 
-      promises.push(customerUpdatePromise);
-      // Wait for all updates to complete
-      Promise.all(promises)
-        .then(() => {
-          res.json({ message: "Box and items added successfully", boxId });
-        })
-        .catch((err) => {
-          console.error("Error updating items:", err.message);
-          res.status(500).json({ error: "Failed to update items" });
-        });
-    }
-  });
-});
-
-app.post("/deletebox", (req, res) => {
-  // ดึงค่า box_id จาก query parameter
-  const customer_id = req.body.customer_id;
-  const box_id = req.body.box_id;
-  // เปลี่ยนเงื่อนไขใน SQL ให้ตรงกับ box_id
-  const updateItemStatusQuery = `
-        UPDATE items
-        SET item_status = ?, box_id = NULL
-        WHERE  box_id = ?;
-    `;
-  db.query(updateItemStatusQuery, [0, box_id], (err) => {
-    if (err) {
-      res.status(500).json({ error: "Failed to update item status" });
-    } else {
-      // Step 2: Delete subbox_item
-      const deleteSubboxItemQuery = `
-                DELETE FROM subbox_item
-                WHERE subbox_id IN (
-                    SELECT subbox_id FROM subbox WHERE box_id = ?
-                )
-            `;
-      db.query(deleteSubboxItemQuery, [box_id], (err) => {
-        if (err) {
-          res.status(500).json({ error: "Failed to delete subbox_item" });
-        } else {
-          // Step 3: Delete subbox
-          const deleteSubboxQuery = `
-                        DELETE FROM subbox WHERE box_id = ?
-                    `;
-          db.query(deleteSubboxQuery, [box_id], (err) => {
-            if (err) {
-              res.status(500).json({ error: "Failed to delete subbox" });
-            } else {
-              // Step 4: Delete box
-              const deleteBoxQuery = `
-                                DELETE FROM box WHERE box_id = ?
-                            `;
-              db.query(deleteBoxQuery, [box_id], (err) => {
-                if (err) {
-                  res
-                    .status(500)
-                    .json({ error: "Failed to delete box " + err });
-                } else {
-                  const updateCustomerQuery = `UPDATE customers SET packages = packages - 1, status = 
-                                        CASE 
-                                            WHEN EXISTS (
-                                                SELECT 1 
-                                                FROM box
-                                                WHERE customer_id = ? AND box_status = 'Packed'
-                                            ) THEN status
-                                            WHEN EXISTS (
-                                                SELECT 1 
-                                                FROM items 
-                                                WHERE tracking_number IN (
-                                                    SELECT tracking_number 
-                                                    FROM packages 
-                                                    WHERE customer_id = ?
-                                                ) AND item_status = 0
-                                            ) THEN 'Warehouse'
-                                            ELSE NULL
-                                        END WHERE customer_id = ?`;
-                  db.query(
-                    updateCustomerQuery,
-                    [customer_id, customer_id, customer_id],
-                    (err) => {
-                      if (err) {
-                        res
-                          .status(500)
-                          .json({ error: "Failed to delete box2 " + err });
-                      } else {
-                        res.json({
-                          message: "Box delete successfully",
-                          box_id,
-                        });
-                      }
-                    }
-                  );
-                }
-              });
-            }
+        db.commit((commitErr) => {
+          if (commitErr) {
+            console.error("Commit error in /addbox:", commitErr.message);
+            return db.rollback(() =>
+              res
+                .status(500)
+                .json({ error: "Commit failed", details: commitErr.message })
+            );
+          }
+          res.json({
+            message: "Box and items added successfully",
+            boxId: box_id,
           });
+        });
+      } catch (err) {
+        console.error("Error during /addbox transaction:", err.message);
+        db.rollback(() =>
+          res
+            .status(500)
+            .json({ error: "Failed to add box", details: err.message })
+        );
+      }
+    });
+  } catch (e) {
+    console.error(
+      "Error switching DB for /addbox:",
+      e.msg || e.message,
+      e.err || ""
+    );
+    return res
+      .status(e.status || 500)
+      .json({ error: e.msg || "DB switch failed" });
+  }
+});
+
+app.post("/deletebox", async (req, res) => {
+  if (!req.body)
+    return res.status(400).json({ error: "Request body is missing" });
+  const { customer_id, box_id, emp_id } = req.body;
+
+  if (!box_id) {
+    return res.status(400).json({ error: "box_id is required." });
+  }
+  if (!customer_id) {
+    // customer_id needed for status update logic
+    return res
+      .status(400)
+      .json({ error: "customer_id is required for status update logic." });
+  }
+
+  try {
+    await switchToEmployeeDB(emp_id);
+    db.beginTransaction(async (txErr) => {
+      if (txErr) {
+        console.error("Transaction start error in /deletebox:", txErr.message);
+        return res
+          .status(500)
+          .json({ error: "Transaction error", details: txErr.message });
+      }
+      try {
+        await q(
+          "UPDATE items SET item_status = 0, box_id = NULL WHERE box_id = ?;",
+          [box_id]
+        );
+        await q(
+          "DELETE FROM subbox_item WHERE subbox_id IN (SELECT subbox_id FROM subbox WHERE box_id = ?)",
+          [box_id]
+        );
+        await q("DELETE FROM subbox WHERE box_id = ?", [box_id]);
+        const boxDeleteResult = await q("DELETE FROM box WHERE box_id = ?", [
+          box_id,
+        ]);
+
+        if (boxDeleteResult.affectedRows > 0) {
+          // Only update customer if box was actually deleted
+          const updateCustomerStatusSQL = `
+                UPDATE customers 
+                SET packages = GREATEST(0, packages - 1), /* Ensure packages don't go negative */
+                    status = CASE 
+                                WHEN EXISTS (SELECT 1 FROM box WHERE customer_id = ? AND box_status = 'Packed') THEN 'Unpaid' /* If other boxes are packed */
+                                WHEN EXISTS (SELECT 1 FROM items i JOIN packages p ON i.tracking_number = p.tracking_number WHERE p.customer_id = ? AND i.item_status = 0) THEN 'Warehouse'
+                                ELSE NULL
+                             END 
+                WHERE customer_id = ?`;
+          await q(updateCustomerStatusSQL, [
+            customer_id,
+            customer_id,
+            customer_id,
+          ]);
+        } else {
+          console.warn(
+            `Box with ID ${box_id} not found for deletion. Customer status not updated.`
+          );
         }
-      });
-    }
-  });
+
+        db.commit((commitErr) => {
+          if (commitErr) {
+            console.error("Commit error in /deletebox:", commitErr.message);
+            return db.rollback(() =>
+              res
+                .status(500)
+                .json({ error: "Commit failed", details: commitErr.message })
+            );
+          }
+          res.json({
+            message: "Box deleted and statuses updated successfully",
+            box_id,
+          });
+        });
+      } catch (err) {
+        console.error("Error during /deletebox transaction:", err.message);
+        db.rollback(() =>
+          res
+            .status(500)
+            .json({ error: "Failed to delete box", details: err.message })
+        );
+      }
+    });
+  } catch (e) {
+    console.error(
+      "Error switching DB for /deletebox:",
+      e.msg || e.message,
+      e.err || ""
+    );
+    return res
+      .status(e.status || 500)
+      .json({ error: e.msg || "DB switch failed" });
+  }
 });
 
-app.get("/boxitem", (req, res) => {
-  // ดึงค่า box_id จาก query parameter
-  const { box_id } = req.query;
-  // เปลี่ยนเงื่อนไขใน SQL ให้ตรงกับ box_id
-  const query = "SELECT * FROM items WHERE box_id = ?;";
-  db.query(query, [box_id], (err, results) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    } else {
-      res.json(results);
-    }
-  });
+app.get("/boxitem", async (req, res) => {
+  const { box_id, emp_id } = req.query;
+  if (!box_id) {
+    return res.status(400).json({ error: "box_id is required." });
+  }
+  try {
+    await switchToEmployeeDB(emp_id);
+    const results = await q("SELECT * FROM items WHERE box_id = ?;", [box_id]);
+    res.json(results); // OK to return empty array if no items
+  } catch (e) {
+    console.error("Error in /boxitem:", e.msg || e.message, e.err || "");
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to fetch box items." });
+  }
 });
 
-app.get("/boxslip", (req, res) => {
-  // ดึงค่า box_id จาก query parameter
-  const { box_id } = req.query;
-  // เปลี่ยนเงื่อนไขใน SQL ให้ตรงกับ box_id
-  const query = "SELECT * FROM slip WHERE box_id = ?;";
-  db.query(query, [box_id], (err, results) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    } else {
-      res.json(results);
-    }
-  });
+app.get("/boxslip", async (req, res) => {
+  const { box_id, emp_id } = req.query;
+  if (!box_id) {
+    return res.status(400).json({ error: "box_id is required." });
+  }
+  try {
+    await switchToEmployeeDB(emp_id);
+    const results = await q("SELECT * FROM slip WHERE box_id = ?;", [box_id]);
+    res.json(results); // OK to return empty array
+  } catch (e) {
+    console.error("Error in /boxslip:", e.msg || e.message, e.err || "");
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to fetch box slips." });
+  }
 });
 
-app.get("/subbox", (req, res) => {
-  // ดึงค่า box_id จาก query parameter
-  const { box_id } = req.query;
-  // เปลี่ยนเงื่อนไขใน SQL ให้ตรงกับ box_id
-  // 1. ดึงข้อมูลจากตาราง subbox ที่มี box_id ตามที่กำหนด
-  const querySubbox =
-    "SELECT subbox.*, ROUND(GREATEST(subbox.weight, (subbox.width * subbox.b_long * subbox.height) / 5000), 2) AS volumetricWeight FROM subbox WHERE box_id = ?;";
-  db.query(querySubbox, [box_id], (err, subboxes) => {
-    if (err) {
-      console.error("Error fetching subboxes:", err.message);
-      return res.status(500).json({ error: "Failed to fetch subboxes" });
-    }
+app.get("/subbox", async (req, res) => {
+  const { box_id, emp_id } = req.query;
+  if (!box_id) {
+    return res.status(400).json({ error: "box_id is required." });
+  }
+  try {
+    await switchToEmployeeDB(emp_id);
+    const querySubbox = `SELECT sb.*, 
+              ROUND(GREATEST(sb.weight, (sb.width * sb.b_long * sb.height) / 5000), 2) AS volumetricWeight 
+       FROM subbox sb WHERE sb.box_id = ?;`;
+    const subboxes = await q(querySubbox, [box_id]);
 
-    // กรณีไม่มี subbox ใดเลย ให้ส่งกลับ array ว่าง
     if (subboxes.length === 0) {
       return res.json([]);
     }
 
-    // 2. เอา subbox_id ทั้งหมดที่ได้ไปดึงข้อมูลจาก subbox_item
     const subboxIds = subboxes.map((sub) => sub.subbox_id);
-    // เช่น [1, 2, 3, ...]
+    const querySubboxItem = `SELECT sbi.*, i.item_name, i.item_type, i.photo_url,
+              CASE 
+                  WHEN i.quantity = 0 THEN 0 
+                  ELSE i.weight * sbi.sub_quantity / i.quantity 
+              END AS adjusted_weight 
+       FROM subbox_item sbi 
+       LEFT JOIN items AS i ON sbi.item_id = i.item_id 
+       WHERE sbi.subbox_id IN (?);`;
+    const subboxItems = await q(querySubboxItem, [subboxIds]);
 
-    // ใช้ IN(?) เพื่อดึงข้อมูล subbox_item ทั้งหมดที่ subbox_id อยู่ใน list
-    const querySubboxItem =
-      "SELECT *, i.weight * sbi.sub_quantity / i.quantity AS adjusted_weight FROM subbox_item sbi LEFT JOIN items AS i ON sbi.item_id = i.item_id WHERE subbox_id IN (?);";
-    db.query(querySubboxItem, [subboxIds], (err, subboxItems) => {
-      if (err) {
-        console.error("Error fetching subbox_items:", err.message);
-        return res.status(500).json({ error: "Failed to fetch subbox_items" });
-      }
+    const subboxMap = subboxes.reduce((acc, sb) => {
+      acc[sb.subbox_id] = { ...sb, items: [] };
+      return acc;
+    }, {});
 
-      // 3. รวมข้อมูล subbox กับ subbox_item ให้เป็นโครงสร้างซ้อนกัน
-      // เช่น [{ subbox_id: 1, box_id: 10, ..., items: [ {...}, {...} ] }, ...]
-      const subboxMap = {};
-      // เตรียม map เพื่อเก็บ subbox แต่ละตัว โดย key คือ subbox_id
-
-      subboxes.forEach((sb) => {
-        subboxMap[sb.subbox_id] = {
-          ...sb,
-          items: [], // เตรียม array ว่าง ๆ สำหรับ subbox_item
-        };
-      });
-
-      subboxItems.forEach((item) => {
-        // หาว่า item นี้อยู่ใน subbox ไหน
-        if (subboxMap[item.subbox_id]) {
-          subboxMap[item.subbox_id].items.push(item);
-        }
-      });
-
-      // แปลง Object map -> Array เพื่อส่งกลับเป็น JSON
-      const result = Object.values(subboxMap);
-      res.json(result);
-    });
-  });
-});
-
-app.get("/subbox_box", (req, res) => {
-  // ดึงค่า box_id จาก query parameter
-  const { box_id } = req.query;
-  // เปลี่ยนเงื่อนไขใน SQL ให้ตรงกับ box_id
-  // 1. ดึงข้อมูลจากตาราง subbox ที่มี box_id ตามที่กำหนด
-  const querySubbox = "SELECT * FROM subbox WHERE box_id = ?;";
-  db.query(querySubbox, [box_id], (err, subboxes) => {
-    if (err) {
-      console.error("Error fetching subboxes:", err.message);
-      return res.status(500).json({ error: "Failed to fetch subboxes" });
-    } else {
-      res.json(subboxes);
-    }
-  });
-});
-
-app.post("/createslip", (req, res) => {
-  const slip = req.body.slip;
-  const amount = req.body.amount;
-  const details = req.body.details;
-  const bid = req.body.BoxId;
-  const query =
-    "INSERT INTO `slip` (`box_id`, `slip_img`, `price`, `details`) VALUES (?, ?, ?, ?);";
-  db.query(query, [bid, slip, amount, details], (err, results) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    } else {
-      res.send("Values inserted");
-    }
-  });
-});
-
-app.post("/deleteslip", (req, res) => {
-  const slip = req.body.slip;
-  const query = "DELETE FROM slip WHERE `slip`.`slip_id` = ?;";
-  db.query(query, [slip], (err, results) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    } else {
-      res.send("Values inserted");
-    }
-  });
-});
-
-// packages & completed-------------------------------------------------------------------------------------------------------------------
-app.get("/box1", (req, res) => {
-  const query =
-    "SELECT * FROM box WHERE box_status = 'Ordered' ORDER BY `priority` ASC;;";
-  db.query(query, (err, OrderedResults) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    }
-
-    const query2 =
-      "SELECT * FROM box WHERE box_status = 'Process' ORDER BY `priority` ASC;;";
-    db.query(query2, (err, ProcessResults) => {
-      if (err) {
-        console.error("Error in second query:", err.message);
-        return res
-          .status(500)
-          .json({ error: "Failed to fetch data from second query" });
-      }
-
-      // Third Query
-      const query3 =
-        "SELECT * FROM box WHERE box_status = 'Packed' ORDER BY `priority` ASC;;";
-      db.query(query3, (err, PackedResults) => {
-        if (err) {
-          console.error("Error in third query:", err.message);
-          return res
-            .status(500)
-            .json({ error: "Failed to fetch data from third query" });
-        }
-        res.json({
-          Ordered: OrderedResults,
-          Process: ProcessResults,
-          Packed: PackedResults,
-        });
-      });
-    });
-  });
-});
-
-app.get("/box2", (req, res) => {
-  const query =
-    "SELECT * FROM box WHERE box_status = 'Paid' ORDER BY `priority` ASC;;";
-  db.query(query, (err, PaidResults) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    }
-
-    const query2 =
-      "SELECT * FROM box WHERE box_status = 'Documented' ORDER BY `priority` ASC;;";
-    db.query(query2, (err, DocumentedResults) => {
-      if (err) {
-        console.error("Error in second query:", err.message);
-        return res
-          .status(500)
-          .json({ error: "Failed to fetch data from second query" });
-      }
-      res.json({
-        Paid: PaidResults,
-        Documented: DocumentedResults,
-      });
-    });
-  });
-});
-
-app.post("/editbox", (req, res) => {
-  const box_id = req.body.box_id;
-  const box_status = req.body.box_status;
-  if (req.body.bprice !== undefined) {
-    const bprice = req.body.bprice;
-    const customer_id = req.body.customer_id;
-    const document = req.body.document;
-    const query1 =
-      "UPDATE `box` SET `box_status` = ?, `bprice` = ?, `document` = ? WHERE `box_id` = ?;";
-    db.query(query1, [box_status, bprice, document, box_id], (err, results) => {
-      if (err) {
-        console.error("Error fetching data:", err.message);
-        res.status(500).json({ error: "Failed to fetch data" });
-      }
-      if (box_status === "Packed") {
-        const query2 = `
-                UPDATE customers 
-                SET status = 'Unpaid' 
-                WHERE customer_id =?;`;
-        db.query(query2, [customer_id], (err, results) => {
-          if (err) {
-            console.error("Error updating customer status:", err.message);
-            res.status(500).json({ error: "Failed to update customer status" });
-          } else {
-            res.send("Values Added and Customer Status Updated");
-          }
-        });
-      } else {
-        const query2 = `
-                UPDATE customers 
-                SET status = 
-                    CASE 
-                        WHEN EXISTS (
-                            SELECT 1 
-                            FROM items 
-                            WHERE tracking_number IN (
-                                SELECT tracking_number 
-                                FROM packages 
-                                WHERE customer_id = ?
-                            ) AND item_status = 0
-                        ) THEN 'Warehouse'
-                        ELSE NULL
-                    END
-                WHERE customer_id =?;`;
-        db.query(query2, [customer_id, customer_id], (err, results) => {
-          if (err) {
-            console.error("Error updating customer status:", err.message);
-            res.status(500).json({ error: "Failed to update customer status" });
-          } else {
-            res.send("Values Added and Customer Status Updated");
-          }
-        });
+    subboxItems.forEach((item) => {
+      if (subboxMap[item.subbox_id]) {
+        subboxMap[item.subbox_id].items.push(item);
       }
     });
-  } else if (req.body.discount !== undefined) {
-    const discount = req.body.discount;
-    const query1 = "UPDATE `box` SET `discount` = ? WHERE `box_id` = ?;";
-    db.query(query1, [discount, box_id], (err, results) => {
-      if (err) {
-        console.error("Error fetching data:", err.message);
-        res.status(500).json({ error: "Failed to fetch data" });
-      } else {
-        res.send("Values Edited");
-      }
-    });
-  } else if (req.body.customer_id !== undefined) {
-    const customer_id = req.body.customer_id;
-    const query1 = "UPDATE `box` SET `box_status` = ? WHERE `box_id` = ?;";
-    db.query(query1, [box_status, box_id], (err, results) => {
-      if (err) {
-        console.error("Error fetching data:", err.message);
-        res.status(500).json({ error: "Failed to fetch data" });
-      } else {
-        if (box_status === "Paid") {
-          const query2 = `
-                    UPDATE customers 
-                    SET status = 
-                        CASE 
-                            WHEN EXISTS (
-                                SELECT 1 
-                                FROM items 
-                                WHERE tracking_number IN (
-                                    SELECT tracking_number 
-                                    FROM packages 
-                                    WHERE customer_id = ?
-                                ) AND item_status = 0
-                            ) THEN 'Warehouse'
-                            ELSE NULL
-                        END
-                    WHERE customer_id =?;`;
-          db.query(query2, [customer_id, customer_id], (err, results) => {
-            if (err) {
-              console.error("Error updating customer status:", err.message);
-              res
-                .status(500)
-                .json({ error: "Failed to update customer status" });
-            } else {
-              res.send("Values Added and Customer Status Updated");
-            }
-          });
-        } else {
-          const query2 = `
-                    UPDATE customers 
-                    SET status = 'Unpaid' 
-                    WHERE customer_id =?;`;
-          db.query(query2, [customer_id], (err, results) => {
-            if (err) {
-              console.error("Error updating customer status:", err.message);
-              res
-                .status(500)
-                .json({ error: "Failed to update customer status" });
-            } else {
-              res.send("Values Added and Customer Status Updated");
-            }
-          });
-        }
-      }
-    });
-  } else {
-    const query1 = "UPDATE `box` SET `box_status` = ? WHERE `box_id` = ?;";
-    db.query(query1, [box_status, box_id], (err, results) => {
-      if (err) {
-        console.error("Error fetching data:", err.message);
-        res.status(500).json({ error: "Failed to fetch data" });
-      } else {
-        res.send("Values Edited");
-      }
-    });
+
+    res.json(Object.values(subboxMap));
+  } catch (e) {
+    console.error("Error in /subbox:", e.msg || e.message, e.err || "");
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to fetch subbox details." });
   }
 });
 
-app.post("/editpriority", (req, res) => {
-  const box_id = req.body.box_id;
-  const priority = req.body.priority;
-  const query1 = "UPDATE `box` SET `priority` = ? WHERE `box_id` = ?;";
-  db.query(query1, [priority, box_id], (err, results) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    } else {
-      res.send("Values Edited");
+app.get("/subbox_box", async (req, res) => {
+  const { box_id, emp_id } = req.query;
+  if (!box_id) {
+    return res.status(400).json({ error: "box_id is required." });
+  }
+  try {
+    await switchToEmployeeDB(emp_id);
+    const subboxes = await q("SELECT * FROM subbox WHERE box_id = ?;", [
+      box_id,
+    ]);
+    res.json(subboxes);
+  } catch (e) {
+    console.error("Error in /subbox_box:", e.msg || e.message, e.err || "");
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to fetch subboxes for box." });
+  }
+});
+
+app.post("/createslip", async (req, res) => {
+  if (!req.body)
+    return res.status(400).json({ error: "Request body is missing" });
+  const { slip: slip_img, amount, details, BoxId: box_id, emp_id } = req.body; // Renamed for clarity
+
+  if (!box_id || slip_img === undefined || amount === undefined) {
+    return res
+      .status(400)
+      .json({ error: "BoxId, slip image URL, and amount are required." });
+  }
+  try {
+    await switchToEmployeeDB(emp_id);
+    const result = await q(
+      "INSERT INTO `slip` (`box_id`, `slip_img`, `price`, `details`) VALUES (?, ?, ?, ?);",
+      [box_id, slip_img, Number(amount) || 0, details || null]
+    );
+    res.json({
+      message: "Slip created successfully.",
+      slipId: result.insertId,
+    });
+  } catch (e) {
+    console.error("Error in /createslip:", e.msg || e.message, e.err || "");
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to create slip." });
+  }
+});
+
+app.post("/deleteslip", async (req, res) => {
+  if (!req.body)
+    return res.status(400).json({ error: "Request body is missing" });
+  const { slip: slip_id, emp_id } = req.body; // Assuming 'slip' from body is slip_id
+
+  if (!slip_id) {
+    return res.status(400).json({ error: "slip_id is required." });
+  }
+  try {
+    await switchToEmployeeDB(emp_id);
+    const result = await q("DELETE FROM slip WHERE `slip_id` = ?;", [slip_id]);
+    if (result.affectedRows === 0) {
+      return res
+        .status(404)
+        .json({ error: "Slip not found or already deleted." });
     }
-  });
+    res.json({ message: "Slip deleted successfully." });
+  } catch (e) {
+    console.error("Error in /deleteslip:", e.msg || e.message, e.err || "");
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to delete slip." });
+  }
+});
+
+// packages & completed-------------------------------------------------------------------------------------------------------------------
+app.get("/box1", async (req, res) => {
+  // For "Ordered", "Process", "Packed"
+  const { emp_id } = req.query;
+  try {
+    await switchToEmployeeDB(emp_id);
+    const [orderedResults, processResults, packedResults] = await Promise.all([
+      q(
+        "SELECT * FROM box WHERE box_status = 'Ordered' ORDER BY `priority` ASC, `box_id` DESC;"
+      ), // Added secondary sort
+      q(
+        "SELECT * FROM box WHERE box_status = 'Process' ORDER BY `priority` ASC, `box_id` DESC;"
+      ),
+      q(
+        "SELECT * FROM box WHERE box_status = 'Packed' ORDER BY `priority` ASC, `box_id` DESC;"
+      ),
+    ]);
+    res.json({
+      Ordered: orderedResults,
+      Process: processResults,
+      Packed: packedResults,
+    });
+  } catch (e) {
+    console.error("Error in /box1:", e.msg || e.message, e.err || "");
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to fetch box data (stage 1)." });
+  }
+});
+
+app.get("/box2", async (req, res) => {
+  // For "Paid", "Documented"
+  const { emp_id } = req.query;
+  try {
+    await switchToEmployeeDB(emp_id);
+    const [paidResults, documentedResults] = await Promise.all([
+      q(
+        "SELECT * FROM box WHERE box_status = 'Paid' ORDER BY `priority` ASC, `box_id` DESC;"
+      ),
+      q(
+        "SELECT * FROM box WHERE box_status = 'Documented' ORDER BY `priority` ASC, `box_id` DESC;"
+      ),
+    ]);
+    res.json({
+      Paid: paidResults,
+      Documented: documentedResults,
+    });
+  } catch (e) {
+    console.error("Error in /box2:", e.msg || e.message, e.err || "");
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to fetch box data (stage 2)." });
+  }
+});
+
+app.post("/editbox", async (req, res) => {
+  if (!req.body)
+    return res.status(400).json({ error: "Request body is missing" });
+  const {
+    box_id,
+    box_status,
+    bprice,
+    customer_id,
+    document,
+    discount,
+    emp_id,
+  } = req.body;
+
+  if (!box_id) return res.status(400).json({ error: "box_id is required." });
+
+  try {
+    await switchToEmployeeDB(emp_id);
+    let mainQuerySql, mainQueryParams;
+    let customerStatusUpdateNeeded = false;
+    let newCustomerStatus = null; // 'Unpaid', 'Warehouse', or NULL
+
+    if (bprice !== undefined) {
+      // Case: Updating status, price, document (typically moving to Packed)
+      if (!box_status || !customer_id)
+        return res
+          .status(400)
+          .json({
+            error:
+              "box_status and customer_id are required when bprice is set.",
+          });
+      mainQuerySql =
+        "UPDATE `box` SET `box_status` = ?, `bprice` = ?, `document` = ? WHERE `box_id` = ?;";
+      mainQueryParams = [
+        box_status,
+        Number(bprice) || 0,
+        document || null,
+        box_id,
+      ];
+      if (box_status === "Packed") {
+        customerStatusUpdateNeeded = true;
+        newCustomerStatus = "Unpaid";
+      } else {
+        // If not "Packed" but bprice is set (unusual), revert to Warehouse/NULL logic
+        customerStatusUpdateNeeded = true;
+        // newCustomerStatus will be determined by item check below
+      }
+    } else if (discount !== undefined) {
+      // Case: Updating discount only
+      mainQuerySql = "UPDATE `box` SET `discount` = ? WHERE `box_id` = ?;";
+      mainQueryParams = [Number(discount) || 0, box_id];
+    } else if (box_status !== undefined && customer_id !== undefined) {
+      // Case: Updating status with customer_id (typically Paid -> Warehouse/NULL or revert from Packed)
+      mainQuerySql = "UPDATE `box` SET `box_status` = ? WHERE `box_id` = ?;";
+      mainQueryParams = [box_status, box_id];
+      customerStatusUpdateNeeded = true;
+      if (box_status === "Paid") {
+        // newCustomerStatus will be determined by item check below
+      } else {
+        // e.g. moving from Packed back to Process, customer should become Unpaid if other Packed boxes exist
+        // This logic is complex, current implementation sets to Unpaid
+        newCustomerStatus = "Unpaid"; // Simplified assumption, may need refinement
+      }
+    } else if (box_status !== undefined) {
+      // Case: Updating status only (no customer context)
+      mainQuerySql = "UPDATE `box` SET `box_status` = ? WHERE `box_id` = ?;";
+      mainQueryParams = [box_status, box_id];
+    } else {
+      return res
+        .status(400)
+        .json({ error: "No valid parameters provided for editbox." });
+    }
+
+    await q(mainQuerySql, mainQueryParams);
+
+    if (customerStatusUpdateNeeded && customer_id) {
+      if (newCustomerStatus === "Unpaid") {
+        await q(
+          "UPDATE customers SET status = 'Unpaid' WHERE customer_id = ?;",
+          [customer_id]
+        );
+      } else {
+        // Determine Warehouse or NULL status
+        const [{ count }] = await q(
+          `SELECT COUNT(*) AS count FROM items i 
+                     JOIN packages p ON i.tracking_number = p.tracking_number 
+                     WHERE p.customer_id = ? AND i.item_status = 0`,
+          [customer_id]
+        );
+        const finalStatus = count > 0 ? "Warehouse" : null;
+        await q(
+          "UPDATE customers SET status = ? WHERE customer_id = ? AND status != 'Unpaid'",
+          [finalStatus, customer_id]
+        );
+      }
+    }
+    res.json({
+      message: "Box edited and customer status updated successfully.",
+    });
+  } catch (e) {
+    console.error("Error in /editbox:", e.msg || e.message, e.err || "");
+    res.status(e.status || 500).json({ error: e.msg || "Failed to edit box." });
+  }
+});
+
+app.post("/editpriority", async (req, res) => {
+  if (!req.body)
+    return res.status(400).json({ error: "Request body is missing" });
+  const { box_id, priority, emp_id } = req.body;
+
+  if (!box_id || priority === undefined) {
+    return res.status(400).json({ error: "box_id and priority are required." });
+  }
+  try {
+    await switchToEmployeeDB(emp_id);
+    await q("UPDATE `box` SET `priority` = ? WHERE `box_id` = ?;", [
+      Number(priority) || 0,
+      box_id,
+    ]);
+    res.json({ message: "Box priority edited successfully." });
+  } catch (e) {
+    console.error("Error in /editpriority:", e.msg || e.message, e.err || "");
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to edit box priority." });
+  }
 });
 
 // appointment-------------------------------------------------------------------------------------------------------------------
-
-app.get("/appointment", (req, res) => {
+app.get("/appointment", async (req, res) => {
+  const { emp_id } = req.query;
+  // status = 'Pending' AND start_date > CURDATE() - INTERVAL 1 DAY
+  // This query selects appointments that are pending and whose start_date is today or in the future.
   const query =
-    "SELECT *, DATE_FORMAT(start_date, '%Y-%m-%d') AS formatted_start_date FROM appointment WHERE status = 'Pending' AND start_date > CURDATE() - INTERVAL 1 DAY;";
-  db.query(query, (err, results) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    } else {
-      res.json(results);
-    }
-  });
+    "SELECT *, DATE_FORMAT(start_date, '%Y-%m-%d') AS formatted_start_date, TIME_FORMAT(start_date, '%H:%i') AS formatted_start_time FROM appointment WHERE status = 'Pending' AND start_date >= CURDATE() ORDER BY start_date ASC;";
+  try {
+    await switchToEmployeeDB(emp_id);
+    const results = await q(query);
+    res.json(results);
+  } catch (e) {
+    console.error("Error in /appointment:", e.msg || e.message, e.err || "");
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to fetch appointments." });
+  }
 });
 
-app.post("/addappoint", (req, res) => {
-  const title = req.body.title;
-  const address_pickup = req.body.address_pickup;
-  const phone_pickup = req.body.phone_pickup;
-  const name_pickup = req.body.name_pickup;
-  const position = req.body.position;
-  const vehicle = req.body.vehicle;
-  const note = req.body.note;
-  const pickupdate = req.body.pickupdate;
-  const pickupTime = req.body.pickupTime;
-  const dateTime = new Date(`${pickupdate}T${pickupTime}:00.000Z`);
-  const start_time = dateTime
-    .toISOString()
-    .replace("T", " ")
-    .replace(".000Z", "");
-  dateTime.setMinutes(dateTime.getMinutes() + 30);
-  const end_time = dateTime
-    .toISOString()
-    .replace("T", " ")
-    .replace(".000Z", "");
+app.post("/addappoint", async (req, res) => {
+  if (!req.body)
+    return res.status(400).json({ error: "Request body is missing" });
+  const {
+    title,
+    address_pickup,
+    phone_pickup,
+    name_pickup,
+    position,
+    vehicle,
+    note,
+    pickupdate,
+    pickupTime,
+    emp_id, // pickupTime should be HH:MM
+  } = req.body;
+
+  if (!title || !pickupdate || !pickupTime) {
+    return res
+      .status(400)
+      .json({ error: "Title, pickupdate, and pickupTime are required." });
+  }
+
+  const dateTimeString = `${pickupdate}T${pickupTime}:00`; // Assuming local time
+  const startDateTime = new Date(dateTimeString);
+  if (isNaN(startDateTime.getTime())) {
+    return res
+      .status(400)
+      .json({
+        error:
+          "Invalid pickupdate or pickupTime format. Use YYYY-MM-DD and HH:MM.",
+      });
+  }
+
+  // MySQL expects 'YYYY-MM-DD HH:MM:SS'
+  const formatForMySQL = (dateObj) => {
+    const year = dateObj.getFullYear();
+    const month = String(dateObj.getMonth() + 1).padStart(2, "0");
+    const day = String(dateObj.getDate()).padStart(2, "0");
+    const hours = String(dateObj.getHours()).padStart(2, "0");
+    const minutes = String(dateObj.getMinutes()).padStart(2, "0");
+    const seconds = String(dateObj.getSeconds()).padStart(2, "0");
+    return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+  };
+
+  const start_time_mysql = formatForMySQL(startDateTime);
+  const endDateTime = new Date(startDateTime.getTime() + 30 * 60000); // Add 30 minutes
+  const end_time_mysql = formatForMySQL(endDateTime);
+
   const query1 =
-    "INSERT INTO `appointment` (`title`, `start_date`, `end_date`, `note`, `customer_id`, `address_pickup`, `phone_pickup`, `name_pickup`, `position`, `vehicle`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
-  db.query(
-    query1,
-    [
+    "INSERT INTO `appointment` (`title`, `start_date`, `end_date`, `note`, `customer_id`, `address_pickup`, `phone_pickup`, `name_pickup`, `position`, `vehicle`, `status`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending');";
+  try {
+    await switchToEmployeeDB(emp_id);
+    const result = await q(query1, [
       title,
-      start_time,
-      end_time,
-      note,
-      title,
-      address_pickup,
-      phone_pickup,
-      name_pickup,
-      position,
-      vehicle,
-    ],
-    (err, results) => {
-      if (err) {
-        console.error("Error fetching data:", err.message);
-        res.status(500).json({ error: "Failed to fetch data" });
-      } else {
-        res.send("Values Edited");
-      }
-    }
-  );
+      start_time_mysql,
+      end_time_mysql,
+      note || null,
+      title, // Assuming title is customer_id
+      address_pickup || null,
+      phone_pickup || null,
+      name_pickup || null,
+      position || null,
+      vehicle || null,
+    ]);
+    res.json({
+      message: "Appointment added successfully.",
+      appointId: result.insertId,
+    });
+  } catch (e) {
+    console.error("Error in /addappoint:", e.msg || e.message, e.err || "");
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to add appointment." });
+  }
 });
 
-app.post("/editappoint", (req, res) => {
-  const address_id = req.body.address_id;
-  const address_pickup = req.body.address_pickup;
-  const phone_pickup = req.body.phone_pickup;
-  const name_pickup = req.body.name_pickup;
-  const position = req.body.position;
-  const vehicle = req.body.vehicle;
-  const note = req.body.note;
-  const query1 =
-    "UPDATE `appointment` SET `note` = ?, `address_pickup` = ?, `phone_pickup` = ?, `name_pickup` = ?, `position` = ?, `vehicle` = ? WHERE `appointment`.`appoint_id` = ?;";
-  db.query(
-    query1,
-    [
-      note,
-      address_pickup,
-      phone_pickup,
-      name_pickup,
-      position,
-      vehicle,
-      address_id,
-    ],
-    (err, results) => {
-      if (err) {
-        console.error("Error fetching data:", err.message);
-        res.status(500).json({ error: "Failed to fetch data" });
-      } else {
-        res.send("Values Edited");
-      }
+app.post("/editappoint", async (req, res) => {
+  if (!req.body)
+    return res.status(400).json({ error: "Request body is missing" });
+  const {
+    appoint_id: address_id, // appoint_id is expected from frontend as 'address_id'
+    address_pickup,
+    phone_pickup,
+    name_pickup,
+    position,
+    vehicle,
+    note,
+    status, // Added status
+    pickupdate,
+    pickupTime, // For editing time
+    emp_id,
+  } = req.body;
+
+  if (!address_id) {
+    return res
+      .status(400)
+      .json({ error: "appoint_id (as address_id) is required." });
+  }
+
+  let start_time_mysql, end_time_mysql;
+  if (pickupdate && pickupTime) {
+    const dateTimeString = `${pickupdate}T${pickupTime}:00`;
+    const startDateTime = new Date(dateTimeString);
+    if (isNaN(startDateTime.getTime())) {
+      return res
+        .status(400)
+        .json({
+          error: "Invalid pickupdate or pickupTime format for editing.",
+        });
     }
-  );
+    const formatForMySQL = (dateObj) =>
+      `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(
+        2,
+        "0"
+      )}-${String(dateObj.getDate()).padStart(2, "0")} ${String(
+        dateObj.getHours()
+      ).padStart(2, "0")}:${String(dateObj.getMinutes()).padStart(
+        2,
+        "0"
+      )}:${String(dateObj.getSeconds()).padStart(2, "0")}`;
+    start_time_mysql = formatForMySQL(startDateTime);
+    const endDateTime = new Date(startDateTime.getTime() + 30 * 60000);
+    end_time_mysql = formatForMySQL(endDateTime);
+  }
+
+  // Build query dynamically based on provided fields
+  const updates = [];
+  const params = [];
+  if (note !== undefined) {
+    updates.push("`note` = ?");
+    params.push(note);
+  }
+  if (address_pickup !== undefined) {
+    updates.push("`address_pickup` = ?");
+    params.push(address_pickup);
+  }
+  if (phone_pickup !== undefined) {
+    updates.push("`phone_pickup` = ?");
+    params.push(phone_pickup);
+  }
+  if (name_pickup !== undefined) {
+    updates.push("`name_pickup` = ?");
+    params.push(name_pickup);
+  }
+  if (position !== undefined) {
+    updates.push("`position` = ?");
+    params.push(position);
+  }
+  if (vehicle !== undefined) {
+    updates.push("`vehicle` = ?");
+    params.push(vehicle);
+  }
+  if (status !== undefined) {
+    updates.push("`status` = ?");
+    params.push(status);
+  }
+  if (start_time_mysql !== undefined) {
+    updates.push("`start_date` = ?");
+    params.push(start_time_mysql);
+  }
+  if (end_time_mysql !== undefined) {
+    updates.push("`end_date` = ?");
+    params.push(end_time_mysql);
+  }
+
+  if (updates.length === 0) {
+    return res.status(400).json({ error: "No fields provided for update." });
+  }
+
+  params.push(address_id); // For WHERE clause
+  const query1 = `UPDATE appointment SET ${updates.join(
+    ", "
+  )} WHERE appoint_id = ?;`;
+
+  try {
+    await switchToEmployeeDB(emp_id);
+    await q(query1, params);
+    res.json({ message: "Appointment edited successfully." });
+  } catch (e) {
+    console.error("Error in /editappoint:", e.msg || e.message, e.err || "");
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to edit appointment." });
+  }
 });
 
 // ThaiBox-------------------------------------------------------------------------------------------------------------------
-app.get("/gentrack", (req, res) => {
-  const { type } = req.query;
-  const typelike = type + "%";
+app.get("/gentrack", async (req, res) => {
+  const { type, emp_id } = req.query;
+  if (!type) {
+    return res.status(400).json({ error: "Tracking type prefix is required." });
+  }
+  const typelike = type + "-%"; // Ensure '-' for parsing number part
+  // This query assumes tracking numbers are like PREFIX-NUMBER
   const query =
-    "SELECT tracking_number FROM `packages` WHERE `tracking_number` LIKE ? ORDER BY CAST(SUBSTRING(tracking_number, INSTR(tracking_number, '-') + 1) AS UNSIGNED) DESC LIMIT 1;";
-  db.query(query, [typelike], (err, results) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    } else {
-      res.json(results);
-    }
-  });
+    "SELECT tracking_number FROM `packages` WHERE `tracking_number` LIKE ? ORDER BY CAST(SUBSTRING_INDEX(tracking_number, '-', -1) AS UNSIGNED) DESC LIMIT 1;";
+  try {
+    await switchToEmployeeDB(emp_id);
+    const results = await q(query, [typelike]);
+    res.json(results); // Returns array, potentially empty
+  } catch (e) {
+    console.error("Error in /gentrack:", e.msg || e.message, e.err || "");
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Failed to generate tracking number." });
+  }
 });
 
 // User-------------------------------------------------------------------------------------------------------------------
-// app.post("/editsendaddr", (req, res) => {
-//   const customer_id = req.body.customer_id;
-//   const customer_name = req.body.customer_name;
-//   const address = req.body.address;
-//   const city = req.body.city;
-//   const state = req.body.state;
-//   const country = req.body.country;
-//   const zipcode = req.body.zipcode;
-//   const phone = req.body.phone;
-//   const doc_type = req.body.doc_type;
-//   const doc_url = req.body.doc_url;
-//   if (req.body.emp_id !== undefined) {
-//     const emp_id = req.body.emp_id;
-//     const querydb = "SELECT * FROM employee WHERE emp_id = ?";
-//     companydb.query(querydb, [emp_id], (err, results) => {
-//       if (err) {
-//         console.error("Error fetching data:", err.message);
-//         res.status(500).json({ error: "Failed to fetch data" });
-//       } else {
-//         const newDatabase = results[0].emp_database; // Example of dynamic DB
-//         const newUser = results[0].emp_database; // Example of dynamic user
-//         const newPassword = results[0].emp_datapass; // Example of dynamic password
-//         db.changeUser(
-//           {
-//             user: newUser,
-//             password: newPassword,
-//             database: newDatabase,
-//           },
-//           (changeErr) => {
-//             if (changeErr) {
-//               console.error("Error changing database:", changeErr.message);
-//               return res
-//                 .status(500)
-//                 .json({ error: "Failed to switch database" });
-//             }
-//             res.json(results);
-//           }
-//         );
-//       }
-//     });
-//   }
-//   if (req.body.doc_url !== undefined) {
-//     const query1 =
-//       "UPDATE customers SET customer_name = ?, address = ?, city = ?, state = ?, country = ?, zipcode = ?, phone = ?, doc_type = ?, doc_url = ? WHERE customers.customer_id = ?;";
-//     db.query(
-//       query1,
-//       [
-//         customer_name,
-//         address,
-//         city,
-//         state,
-//         country,
-//         zipcode,
-//         phone,
-//         doc_type,
-//         doc_url,
-//         customer_id,
-//       ],
-//       (err, results) => {
-//         if (err) {
-//           console.error("Error fetching data:", err.message);
-//           res.status(500).json({ error: "Failed to fetch data" });
-//         } else {
-//           res.send("Values Edited");
-//         }
-//       }
-//     );
-//   } else {
-//     const query1 =
-//       "UPDATE customers SET customer_name = ?, address = ?, city = ?, state = ?, country = ?, zipcode = ?, phone = ? WHERE customers.customer_id = ?;";
-//     db.query(
-//       query1,
-//       [
-//         customer_name,
-//         address,
-//         city,
-//         state,
-//         country,
-//         zipcode,
-//         phone,
-//         customer_id,
-//       ],
-//       (err, results) => {
-//         if (err) {
-//           console.error("Error fetching data:", err.message);
-//           res.status(500).json({ error: "Failed to fetch data" });
-//         } else {
-//           res.send("Values Edited");
-//         }
-//       }
-//     );
-//   }
-// });
-
-// แก้ไข /editsendaddr ให้สลับ DB ก่อน แล้วรัน UPDATE ทีเดียว ตอบกลับแค่ครั้งเดียว
-
 app.post("/editsendaddr", async (req, res) => {
+  if (!req.body)
+    return res.status(400).json({ error: "Request body is missing" });
   const {
     customer_id,
     customer_name,
     address,
     city,
     state,
-    country = "Thailand",
+    country = "Thailand", // Default value
     zipcode,
     phone,
     doc_type,
@@ -1963,51 +2443,94 @@ app.post("/editsendaddr", async (req, res) => {
     emp_id,
   } = req.body;
 
-  if (!emp_id) {
-    return res.status(400).json({ error: "emp_id is required" });
-  }
+  if (!emp_id) return res.status(400).json({ error: "emp_id is required" });
+  if (!customer_id)
+    return res.status(400).json({ error: "customer_id is required" });
+  // Add more validation for other fields if they are mandatory
 
   try {
-    // 1) สลับไปใช้ฐานข้อมูลของบริษัทผ่าน middleware/helper
     await switchToEmployeeDB(emp_id);
-
-    // 2) สร้าง SQL และ params เบื้องต้น
     let sql =
       "UPDATE customers SET customer_name = ?, address = ?, city = ?, state = ?, country = ?, zipcode = ?, phone = ?";
     const params = [
-      customer_name,
-      address,
-      city,
-      state,
+      customer_name || null,
+      address || null,
+      city || null,
+      state || null,
       country,
-      zipcode,
-      phone,
+      zipcode || null,
+      phone || null,
     ];
 
-    // 3) ถ้ามี doc_type + doc_url ให้เพิ่มเข้า SQL
     if (doc_type !== undefined && doc_url !== undefined) {
       sql += ", doc_type = ?, doc_url = ?";
       params.push(doc_type, doc_url);
     }
-
-    // 4) เติม WHERE และ customer_id
     sql += " WHERE customer_id = ?";
     params.push(customer_id);
 
-    // 5) รันคำสั่ง UPDATE
     await q(sql, params);
-
-    // 6) ตอบกลับผลสำเร็จ
-    return res.json({ success: true, message: "Customer address updated" });
-  } catch (err) {
-    console.error("Error in /editsendaddr:", err);
+    return res.json({
+      success: true,
+      message: "Customer address updated successfully.",
+    });
+  } catch (e) {
+    console.error("Error in /editsendaddr:", e.msg || e.message, e.err || "");
     return res
-      .status(500)
-      .json({ error: err.message || "Internal server error" });
+      .status(e.status || 500)
+      .json({ error: e.msg || "Internal server error while updating address" });
   }
 });
 
 // Setting-------------------------------------------------------------------------------------------------------------------
+// Routes related to FS operations for settings need robust path handling and error checking.
+// Ensure RAILWAY_VOLUME_MOUNT_PATH is correctly set.
+
+const getCompanyFilePath = (companyName, fileName) => {
+  if (!process.env.RAILWAY_VOLUME_MOUNT_PATH) {
+    console.error("RAILWAY_VOLUME_MOUNT_PATH is not set.");
+    throw new Error("Server configuration error: Volume mount path missing.");
+  }
+  if (
+    !companyName ||
+    typeof companyName !== "string" ||
+    companyName.trim() === ""
+  ) {
+    throw new Error("Invalid company name for file path generation.");
+  }
+  const dirPath = path.join(
+    process.env.RAILWAY_VOLUME_MOUNT_PATH,
+    companyName.trim()
+  );
+  const filePath = path.join(dirPath, fileName);
+  return { dirPath, filePath };
+};
+
+const readOrCreateJsonFile = (filePath, dirPath, defaultData = {}) => {
+  try {
+    if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
+    if (!fs.existsSync(filePath))
+      fs.writeFileSync(filePath, JSON.stringify(defaultData, null, 2));
+    const data = fs.readFileSync(filePath, "utf-8");
+    return JSON.parse(data);
+  } catch (fsErr) {
+    console.error(`Filesystem error for ${filePath}:`, fsErr.message);
+    throw new Error(
+      `Failed to load or create ${path.basename(filePath)} information`
+    );
+  }
+};
+
+const writeJsonFile = (filePath, dirPath, data) => {
+  try {
+    if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
+  } catch (fsErr) {
+    console.error(`Filesystem error writing to ${filePath}:`, fsErr.message);
+    throw new Error(`Failed to save ${path.basename(filePath)} information`);
+  }
+};
+
 app.get("/company_info", (req, res) => {
   const { emp_id } = req.query;
   if (!emp_id) return res.status(400).json({ error: "emp_id is required" });
@@ -2017,28 +2540,29 @@ app.get("/company_info", (req, res) => {
     [emp_id],
     (err, results) => {
       if (err) {
-        console.error("Error fetching data:", err.message);
+        console.error("DB error in /company_info:", err.message);
         return res.status(500).json({ error: "Database error" });
       }
-
-      const row = firstRowOr404(res, results);
-      if (!row) return;
-
-      const dirPath = path.join(
-        process.env.RAILWAY_VOLUME_MOUNT_PATH,
-        row.company_name
+      const row = firstRowOr404(
+        res,
+        results,
+        "Employee not found for company_info."
       );
-      const filePath = path.join(dirPath, "company_info.json");
+      if (!row) return;
+      if (!row.company_name)
+        return res
+          .status(500)
+          .json({ error: "Company name not found for employee." });
 
       try {
-        if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
-        if (!fs.existsSync(filePath)) fs.writeFileSync(filePath, "{}");
-
-        const data = fs.readFileSync(filePath, "utf-8");
-        res.json(JSON.parse(data));
-      } catch (fsErr) {
-        console.error("Filesystem error:", fsErr);
-        res.status(500).json({ error: "Failed to load company information" });
+        const { dirPath, filePath } = getCompanyFilePath(
+          row.company_name,
+          "company_info.json"
+        );
+        const data = readOrCreateJsonFile(filePath, dirPath, {});
+        res.json(data);
+      } catch (e) {
+        res.status(500).json({ error: e.message });
       }
     }
   );
@@ -2046,334 +2570,327 @@ app.get("/company_info", (req, res) => {
 
 app.get("/dropdown", (req, res) => {
   const { emp_id } = req.query;
-
-  // ถ้าไม่ส่ง emp_id มาเลย
-  if (!emp_id) {
-    return res.status(400).json({ error: "emp_id is required" });
-  }
-
+  if (!emp_id) return res.status(400).json({ error: "emp_id is required" });
   const emptyData = { channels: [], categories: [], levels: [] };
-  const sql = "SELECT * FROM `employee` WHERE `emp_id` = ?";
 
-  companydb.query(sql, [emp_id], (err, results) => {
-    if (err) {
-      console.error("DB error:", err.message);
-      return res.status(500).json({ error: "Failed to fetch data" });
-    }
-
-    /* ✅  จุดกันล้ม – ไม่มีพนักงานตาม emp_id */
-    if (!results || results.length === 0) {
-      return res.status(404).json({ error: "Employee not found" });
-    }
-
-    const companyName = results[0].company_name; // ปลอดภัยแล้ว
-    const filePath = path.join(
-      process.env.RAILWAY_VOLUME_MOUNT_PATH,
-      companyName,
-      "dropdown.json"
-    );
-    const dirPath = path.dirname(filePath);
-    // สร้างโฟลเดอร์ถ้ายังไม่มี
-    if (!fs.existsSync(dirPath)) {
-      fs.mkdirSync(dirPath, { recursive: true });
-    }
-
-    // สร้างไฟล์เปล่าถ้ายังไม่มี
-    if (!fs.existsSync(filePath)) {
-      fs.writeFileSync(filePath, JSON.stringify(emptyData, null, 2));
-    }
-
-    // อ่านไฟล์และส่งกลับ
-    fs.readFile(filePath, "utf-8", (err, data) => {
+  companydb.query(
+    "SELECT company_name FROM employee WHERE emp_id = ?",
+    [emp_id],
+    (err, results) => {
       if (err) {
-        console.error("Read file error:", err.message);
+        console.error("DB error in /dropdown:", err.message);
+        return res.status(500).json({ error: "Failed to fetch employee data" });
+      }
+      const row = firstRowOr404(
+        res,
+        results,
+        "Employee not found for dropdown settings."
+      );
+      if (!row) return;
+      if (!row.company_name)
         return res
           .status(500)
-          .json({ error: "Failed to load company information" });
+          .json({ error: "Company name not found for employee." });
+
+      try {
+        const { dirPath, filePath } = getCompanyFilePath(
+          row.company_name,
+          "dropdown.json"
+        );
+        const data = readOrCreateJsonFile(filePath, dirPath, emptyData);
+        res.json(data);
+      } catch (e) {
+        res.status(500).json({ error: e.message });
       }
-      res.json(JSON.parse(data));
-    });
-  });
+    }
+  );
 });
 
 app.post("/editdropdown", (req, res) => {
-  const newData = req.body;
-  const uniqueChannels = [
-    ...new Set(newData.channels.map((channel) => channel.name)),
+  if (!req.body)
+    return res.status(400).json({ error: "Request body is missing" });
+  const { channels, categories, levels, emp_id } = req.body; // Assuming newData structure
+
+  if (
+    !emp_id ||
+    !Array.isArray(channels) ||
+    !Array.isArray(categories) ||
+    !Array.isArray(levels)
+  ) {
+    return res
+      .status(400)
+      .json({
+        error:
+          "emp_id and arrays for channels, categories, levels are required.",
+      });
+  }
+  // Sanitize: ensure names are strings and unique
+  const sanitizeArray = (arr) => [
+    ...new Set(
+      arr
+        .filter((item) => item && typeof item.name === "string")
+        .map((item) => item.name.trim())
+    ),
   ];
-  const uniqueCategories = [
-    ...new Set(newData.categories.map((channel) => channel.name)),
-  ];
-  const uniqueLevels = [
-    ...new Set(newData.levels.map((channel) => channel.name)),
-  ];
+
   const processedData = {
-    channels: uniqueChannels,
-    categories: uniqueCategories,
-    levels: uniqueLevels,
+    channels: sanitizeArray(channels),
+    categories: sanitizeArray(categories),
+    levels: sanitizeArray(levels),
   };
-  const emp_id = req.body.emp_id;
-  const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-  companydb.query(query, [emp_id], (err, results) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    } else {
-      const file = `${results[0].company_name}/dropdown.json`;
-      const filePath = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, file);
-      const dirPath = path.dirname(filePath);
-      if (!fs.existsSync(dirPath)) {
-        fs.mkdirSync(dirPath, { recursive: true });
-      }
-      fs.writeFile(filePath, JSON.stringify(processedData, null, 2), (err) => {
-        if (err) {
-          console.error("Error writing to JSON file:", err);
-        } else {
-          res.send("Values Edited");
-        }
-      });
-    }
-  });
-});
-
-app.get("/price", (req, res) => {
-  const { emp_id } = req.query;
-  if (!emp_id) return res.status(400).json({ error: "emp_id is required" });
 
   companydb.query(
     "SELECT company_name FROM employee WHERE emp_id = ?",
     [emp_id],
     (err, results) => {
       if (err) {
-        console.error("Error fetching data:", err.message);
-        return res.status(500).json({ error: "Failed to fetch data" });
+        console.error("DB error in /editdropdown:", err.message);
+        return res.status(500).json({ error: "Failed to fetch employee data" });
       }
-
-      const row = firstRowOr404(res, results);
-      if (!row) return; // จบงานถ้าไม่เจอพนักงาน
-
-      const dirPath = path.join(
-        process.env.RAILWAY_VOLUME_MOUNT_PATH,
-        row.company_name
+      const row = firstRowOr404(
+        res,
+        results,
+        "Employee not found for dropdown settings update."
       );
-      const filePath = path.join(dirPath, "price.json");
-
-      if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
-      if (!fs.existsSync(filePath)) fs.writeFileSync(filePath, "{}");
-
-      fs.readFile(filePath, "utf-8", (err, data) => {
-        if (err) {
-          console.error("Read file error:", err.message);
-          return res
-            .status(500)
-            .json({ error: "Failed to load company information" });
-        }
-        res.json(JSON.parse(data));
-      });
-    }
-  );
-});
-
-app.post("/editprice", (req, res) => {
-  const emp_id = req.body.emp_id;
-  const newData = req.body.updatedPricing;
-  const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-  companydb.query(query, [emp_id], (err, results) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    } else {
-      const file = `${results[0].company_name}/price.json`;
-      const filePath = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, file);
-      const dirPath = path.dirname(filePath);
-      if (!fs.existsSync(dirPath)) {
-        fs.mkdirSync(dirPath, { recursive: true });
-      }
-      fs.writeFile(filePath, JSON.stringify(newData, null, 2), (err) => {
-        if (err) {
-          console.error("Error writing to JSON file:", err);
-        } else {
-          res.send("Values Edited");
-        }
-      });
-    }
-  });
-});
-app.get("/promotion", (req, res) => {
-  const { emp_id } = req.query;
-  if (!emp_id) return res.status(400).json({ error: "emp_id is required" });
-
-  companydb.query(
-    "SELECT company_name FROM employee WHERE emp_id = ?",
-    [emp_id],
-    (err, results) => {
-      if (err) {
-        console.error("Error fetching data:", err.message);
-        return res.status(500).json({ error: "Failed to fetch data" });
-      }
-
-      const row = firstRowOr404(res, results);
       if (!row) return;
+      if (!row.company_name)
+        return res
+          .status(500)
+          .json({ error: "Company name not found for employee." });
 
-      const dirPath = path.join(
-        process.env.RAILWAY_VOLUME_MOUNT_PATH,
-        row.company_name
-      );
-      const filePath = path.join(dirPath, "promotion.json");
-
-      if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
-      if (!fs.existsSync(filePath)) fs.writeFileSync(filePath, "{}");
-
-      fs.readFile(filePath, "utf-8", (err, data) => {
-        if (err) {
-          console.error("Read file error:", err.message);
-          return res
-            .status(500)
-            .json({ error: "Failed to load company information" });
-        }
-        res.json(JSON.parse(data));
-      });
+      try {
+        const { dirPath, filePath } = getCompanyFilePath(
+          row.company_name,
+          "dropdown.json"
+        );
+        writeJsonFile(filePath, dirPath, processedData);
+        res.json({ message: "Dropdown settings updated successfully." });
+      } catch (e) {
+        res.status(500).json({ error: e.message });
+      }
     }
   );
 });
 
-app.post("/editpromotion", (req, res) => {
-  const emp_id = req.body.emp_id;
-  const newData = req.body.updatedPromotions;
-  const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-  companydb.query(query, [emp_id], (err, results) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    } else {
-      const file = `${results[0].company_name}/promotion.json`;
-      const filePath = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, file);
-      const dirPath = path.dirname(filePath);
-      if (!fs.existsSync(dirPath)) {
-        fs.mkdirSync(dirPath, { recursive: true });
-      }
-      fs.writeFile(filePath, JSON.stringify(newData, null, 2), (err) => {
+// Generic settings GET and POST handlers
+const createSettingsRoute = (settingName, defaultData = {}) => {
+  app.get(`/${settingName}`, (req, res) => {
+    const { emp_id } = req.query;
+    if (!emp_id) return res.status(400).json({ error: "emp_id is required" });
+
+    companydb.query(
+      "SELECT company_name FROM employee WHERE emp_id = ?",
+      [emp_id],
+      (err, results) => {
         if (err) {
-          console.error("Error writing to JSON file:", err);
-        } else {
-          res.send("Values Edited");
+          console.error(`DB error in /${settingName}:`, err.message);
+          return res.status(500).json({ error: "Database error" });
         }
-      });
-    }
-  });
-});
-
-app.get("/warehouse", (req, res) => {
-  const { emp_id } = req.query;
-  if (!emp_id) return res.status(400).json({ error: "emp_id is required" });
-
-  companydb.query(
-    "SELECT company_name FROM employee WHERE emp_id = ?",
-    [emp_id],
-    (err, results) => {
-      if (err) {
-        console.error("Error fetching data:", err.message);
-        return res.status(500).json({ error: "Failed to fetch data" });
-      }
-
-      const row = firstRowOr404(res, results);
-      if (!row) return;
-
-      const dirPath = path.join(
-        process.env.RAILWAY_VOLUME_MOUNT_PATH,
-        row.company_name
-      );
-      const filePath = path.join(dirPath, "warehouse.json");
-
-      if (!fs.existsSync(dirPath)) fs.mkdirSync(dirPath, { recursive: true });
-      if (!fs.existsSync(filePath)) fs.writeFileSync(filePath, "{}");
-
-      fs.readFile(filePath, "utf-8", (err, data) => {
-        if (err) {
-          console.error("Read file error:", err.message);
+        const row = firstRowOr404(
+          res,
+          results,
+          `Employee not found for ${settingName} settings.`
+        );
+        if (!row) return;
+        if (!row.company_name)
           return res
             .status(500)
-            .json({ error: "Failed to load company information" });
-        }
-        res.json(JSON.parse(data));
-      });
-    }
-  );
-});
+            .json({ error: `Company name not found for ${settingName}.` });
 
-app.post("/editwarehoussetting", (req, res) => {
-  const emp_id = req.body.emp_id;
-  const newData = req.body;
-  const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-  companydb.query(query, [emp_id], (err, results) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    } else {
-      const file = `${results[0].company_name}/warehouse.json`;
-      const filePath = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, file);
-      const dirPath = path.dirname(filePath);
-      if (!fs.existsSync(dirPath)) {
-        fs.mkdirSync(dirPath, { recursive: true });
+        try {
+          const { dirPath, filePath } = getCompanyFilePath(
+            row.company_name,
+            `${settingName}.json`
+          );
+          const data = readOrCreateJsonFile(filePath, dirPath, defaultData);
+          res.json(data);
+        } catch (e) {
+          res.status(500).json({ error: e.message });
+        }
       }
-      fs.writeFile(filePath, JSON.stringify(newData, null, 2), (err) => {
-        if (err) {
-          console.error("Error writing to JSON file:", err);
-        } else {
-          res.send("Values Edited");
-        }
-      });
-    }
+    );
   });
-});
 
+  app.post(`/edit${settingName}`, (req, res) => {
+    // data for edit should be in req.body.updatedData or similar
+    if (!req.body)
+      return res.status(400).json({ error: "Request body is missing" });
+    const { emp_id } = req.body; // emp_id must be in the body
+    const newData =
+      req.body.updatedData ||
+      req.body.updatedPricing ||
+      req.body.updatedPromotions ||
+      req.body.formData ||
+      req.body; // Accommodate different body structures
+
+    if (!emp_id || newData === undefined)
+      return res
+        .status(400)
+        .json({ error: `emp_id and data for ${settingName} are required.` });
+
+    // Simple validation: newData should be an object
+    if (typeof newData !== "object" || newData === null) {
+      return res
+        .status(400)
+        .json({ error: `Data for ${settingName} must be an object.` });
+    }
+
+    companydb.query(
+      "SELECT company_name FROM employee WHERE emp_id = ?",
+      [emp_id],
+      (err, results) => {
+        if (err) {
+          console.error(`DB error in /edit${settingName}:`, err.message);
+          return res.status(500).json({ error: "Database error" });
+        }
+        const row = firstRowOr404(
+          res,
+          results,
+          `Employee not found for ${settingName} settings update.`
+        );
+        if (!row) return;
+        if (!row.company_name)
+          return res
+            .status(500)
+            .json({ error: `Company name not found for ${settingName}.` });
+
+        try {
+          const { dirPath, filePath } = getCompanyFilePath(
+            row.company_name,
+            `${settingName}.json`
+          );
+          let dataToSave = newData;
+          // Specific handling for /editwarehoussetting if 'emp_id' was part of data
+          if (settingName === "warehouse" && newData.emp_id) {
+            const { emp_id: _, ...restOfData } = newData; // Remove emp_id from data being saved
+            dataToSave = restOfData;
+          } else if (newData.updatedPricing)
+            dataToSave = newData.updatedPricing; // for /editprice
+          else if (newData.updatedPromotions)
+            dataToSave = newData.updatedPromotions; // for /editpromotion
+          else if (newData.formData) dataToSave = newData.formData; // for /editcompany_info
+
+          writeJsonFile(filePath, dirPath, dataToSave);
+          res.json({
+            message: `${settingName} settings updated successfully.`,
+          });
+        } catch (e) {
+          res.status(500).json({ error: e.message });
+        }
+      }
+    );
+  });
+};
+
+createSettingsRoute("price");
+createSettingsRoute("promotion");
+createSettingsRoute("warehouse"); // For /editwarehoussetting, data is req.body directly
+createSettingsRoute("company_info"); // For /editcompany_info, data is req.body.formData
+
+// Employee management uses companydb directly
 app.get("/employee", (req, res) => {
-  const { emp_id } = req.query;
-  const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-  companydb.query(query, [emp_id], (err, results) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    } else {
-      const query = "SELECT * FROM `employee` WHERE `company_name` = ?";
-      companydb.query(query, [results[0].company_name], (err, results) => {
-        if (err) {
-          console.error("Error fetching data:", err.message);
-          res.status(500).json({ error: "Failed to fetch data" });
-        } else {
-          res.json(results);
+  const { emp_id } = req.query; // This is the requesting employee's ID
+  if (!emp_id)
+    return res.status(400).json({ error: "Requesting emp_id is required." });
+
+  companydb.query(
+    "SELECT company_name FROM `employee` WHERE `emp_id` = ?",
+    [emp_id],
+    (err, results) => {
+      if (err) {
+        console.error("DB error in /employee (step 1):", err.message);
+        return res.status(500).json({ error: "Failed to fetch data" });
+      }
+      const row = firstRowOr404(res, results, "Requesting employee not found.");
+      if (!row) return;
+      if (!row.company_name)
+        return res
+          .status(500)
+          .json({ error: "Company name not found for requesting employee." });
+
+      companydb.query(
+        "SELECT emp_id, username, emp_name, role, emp_date, eimg FROM `employee` WHERE `company_name` = ?",
+        [row.company_name],
+        (err, companyEmployees) => {
+          if (err) {
+            console.error("DB error in /employee (step 2):", err.message);
+            return res
+              .status(500)
+              .json({ error: "Failed to fetch company employees" });
+          }
+          res.json(companyEmployees);
         }
-      });
+      );
     }
-  });
+  );
 });
 
 app.get("/employeeinfo", (req, res) => {
-  const { id } = req.query;
-  const query = "SELECT * FROM `employee` WHERE `employee`.`emp_id` = ?;";
-  companydb.query(query, [decryptEmpId(id)], (err, results) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    } else {
-      res.json(results);
+  const { id } = req.query; // Encrypted ID of the employee whose info is requested
+  if (!id)
+    return res
+      .status(400)
+      .json({ error: "Encrypted employee ID (id) is required." });
+  const decryptedId = decryptEmpId(id);
+  if (!decryptedId)
+    return res
+      .status(400)
+      .json({ error: "Invalid or undecryptable employee ID." });
+
+  companydb.query(
+    "SELECT emp_id, username, emp_name, role, emp_date, eimg FROM `employee` WHERE `emp_id` = ?;",
+    [decryptedId],
+    (err, results) => {
+      if (err) {
+        console.error("DB error in /employeeinfo:", err.message);
+        return res.status(500).json({ error: "Failed to fetch data" });
+      }
+      const row = firstRowOr404(res, results, "Employee info not found.");
+      if (!row) return;
+      res.json(row); // Send single employee object
     }
-  });
+  );
 });
 
 app.post("/addemployee", (req, res) => {
-  const emp_name = req.body.emp_name;
-  const username = req.body.username;
-  const role = req.body.role;
-  const password = req.body.password;
-  const emp_date = req.body.emp_date;
-  const emp_id = req.body.emp_id;
-  const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-  companydb.query(query, [emp_id], (err, results) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    } else {
+  if (!req.body)
+    return res.status(400).json({ error: "Request body is missing" });
+  const {
+    emp_name,
+    username,
+    role,
+    password,
+    emp_date,
+    emp_id: requesting_emp_id,
+  } = req.body; // requesting_emp_id is of admin/owner
+
+  if (!emp_name || !username || !role || !password || !requesting_emp_id) {
+    return res
+      .status(400)
+      .json({ error: "Missing required fields for adding employee." });
+  }
+
+  companydb.query(
+    "SELECT company_name, emp_database, emp_datapass FROM `employee` WHERE `emp_id` = ?",
+    [requesting_emp_id],
+    (err, results) => {
+      if (err) {
+        console.error("DB error in /addemployee (step 1):", err.message);
+        return res
+          .status(500)
+          .json({ error: "Failed to fetch requesting employee data" });
+      }
+      const row = firstRowOr404(res, results, "Requesting employee not found.");
+      if (!row) return;
+      if (!row.company_name || !row.emp_database || !row.emp_datapass) {
+        return res
+          .status(500)
+          .json({
+            error:
+              "Configuration error: Requesting employee's company details missing.",
+          });
+      }
+
       const query1 =
         "INSERT INTO `employee` (`username`, `emp_name`, `password`, `emp_database`, `emp_datapass`, `company_name`, `role`, `eimg`, `emp_date`) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?);";
       companydb.query(
@@ -2381,585 +2898,572 @@ app.post("/addemployee", (req, res) => {
         [
           username,
           emp_name,
-          password,
-          results[0].emp_database,
-          results[0].emp_datapass,
-          results[0].company_name,
+          password, // Consider hashing password
+          row.emp_database,
+          row.emp_datapass,
+          row.company_name,
           role,
-          emp_date,
+          emp_date || new Date(),
         ],
-        (err, results) => {
+        (err, insertResult) => {
           if (err) {
-            console.error("Error fetching data:", err.message);
-            res.status(500).json({ error: "Failed to fetch data" });
-          } else {
-            res.send("Values Edited");
+            console.error("DB error in /addemployee (step 2):", err.message);
+            return res
+              .status(500)
+              .json({ error: "Failed to add new employee" });
           }
+          res.json({
+            message: "Employee added successfully.",
+            empId: insertResult.insertId,
+          });
         }
       );
-    }
-  });
-});
-
-app.post("/editemployee", (req, res) => {
-  const emp_id = req.body.emp_id;
-  const emp_name = req.body.emp_name;
-  const password = req.body.password;
-  const role = req.body.role;
-  const username = req.body.username;
-  const query =
-    "UPDATE `employee` SET `username` = ?, `emp_name` = ?, `password` = ?, `role` = ? WHERE `employee`.`emp_id` = ?;";
-  companydb.query(
-    query,
-    [username, emp_name, password, role, emp_id],
-    (err, results) => {
-      if (err) {
-        console.error("Error fetching data:", err.message);
-        res.status(500).json({ error: "Failed to fetch data" });
-      } else {
-        res.json(results);
-      }
     }
   );
 });
 
+app.post("/editemployee", (req, res) => {
+  // Can be called by admin/owner
+  if (!req.body)
+    return res.status(400).json({ error: "Request body is missing" });
+  const { emp_id, emp_name, password, role, username } = req.body; // emp_id is the ID of employee to be edited
+
+  if (!emp_id)
+    return res
+      .status(400)
+      .json({ error: "emp_id of employee to edit is required." });
+  // Build dynamic query
+  const updates = [];
+  const params = [];
+  if (username !== undefined) {
+    updates.push("`username` = ?");
+    params.push(username);
+  }
+  if (emp_name !== undefined) {
+    updates.push("`emp_name` = ?");
+    params.push(emp_name);
+  }
+  if (password !== undefined) {
+    updates.push("`password` = ?");
+    params.push(password);
+  } // Consider hashing
+  if (role !== undefined) {
+    updates.push("`role` = ?");
+    params.push(role);
+  }
+
+  if (updates.length === 0)
+    return res.status(400).json({ error: "No fields provided for update." });
+
+  params.push(emp_id);
+  const query = `UPDATE employee SET ${updates.join(", ")} WHERE emp_id = ?;`;
+
+  companydb.query(query, params, (err, results) => {
+    if (err) {
+      console.error("DB error in /editemployee:", err.message);
+      return res.status(500).json({ error: "Failed to update employee" });
+    }
+    if (results.affectedRows === 0)
+      return res
+        .status(404)
+        .json({ error: "Employee not found or no changes made." });
+    res.json({ message: "Employee updated successfully." });
+  });
+});
+
 app.post("/deleteemployee", (req, res) => {
-  const emp_id = req.body.emp_id;
+  // Can be called by admin/owner
+  if (!req.body)
+    return res.status(400).json({ error: "Request body is missing" });
+  const { emp_id } = req.body; // emp_id of employee to be deleted
+
+  if (!emp_id)
+    return res
+      .status(400)
+      .json({ error: "emp_id of employee to delete is required." });
+
+  // Prevent owner from being deleted
   const query1 =
-    "DELETE FROM `employee` WHERE `employee`.`emp_id` = ? AND `employee`.`role` != 'owner'";
+    "DELETE FROM `employee` WHERE `emp_id` = ? AND `role` != 'owner';";
   companydb.query(query1, [emp_id], (err, results) => {
     if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    } else {
-      res.send("Values Delete");
+      console.error("DB error in /deleteemployee:", err.message);
+      return res.status(500).json({ error: "Failed to delete employee" });
     }
+    if (results.affectedRows === 0) {
+      return res
+        .status(404)
+        .json({
+          error:
+            "Employee not found, or tried to delete owner, or already deleted.",
+        });
+    }
+    res.json({ message: "Employee deleted successfully." });
   });
 });
 
-app.post("/editcompany_info", (req, res) => {
-  const emp_id = req.body.emp_id;
-  const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
-  companydb.query(query, [emp_id], (err, results) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    } else {
-      const file = `${results[0].company_name}/company_info.json`;
-      const filePath = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, file);
-      const dirPath = path.dirname(filePath);
-      if (!fs.existsSync(dirPath)) {
-        fs.mkdirSync(dirPath, { recursive: true });
-      }
-      const newData = req.body.formData;
-      fs.writeFile(filePath, JSON.stringify(newData, null, 2), (err) => {
-        if (err) {
-          console.error("Error writing to JSON file:", err);
-          res.status(500).json({ error: "Failed to save company information" });
-        }
-      });
+//-------------------------------------------Local Management (Multer for local disk)------------------------------------------
+// These routes are for local file storage, which might not be ideal for Railway (ephemeral storage).
+// S3 uploads are generally preferred for cloud environments.
+// Ensure RAILWAY_VOLUME_MOUNT_PATH is a persistent volume if local storage is truly needed.
+
+const getLocalUploadPath = (subfolder) => {
+  if (!process.env.RAILWAY_VOLUME_MOUNT_PATH) {
+    console.error("RAILWAY_VOLUME_MOUNT_PATH is not set for local uploads.");
+    return null; // Or throw error
+  }
+  const baseUploadDir = path.join(
+    process.env.RAILWAY_VOLUME_MOUNT_PATH,
+    "uploads"
+  );
+  const targetDir = path.join(baseUploadDir, subfolder);
+  if (!fs.existsSync(targetDir)) {
+    try {
+      fs.mkdirSync(targetDir, { recursive: true });
+    } catch (e) {
+      console.error(`Failed to create directory ${targetDir}:`, e.message);
+      return null;
     }
-  });
-});
-
-//-------------------------------------------Local Management------------------------------------------
-
-// const multer = require("multer");
-
-//--------------------------------------------------- IMAGE UPLOAD ---------------------------------------------------
+  }
+  return targetDir;
+};
 
 const imageStorage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadDir = path.join(
-      process.env.RAILWAY_VOLUME_MOUNT_PATH,
-      "uploads",
-      "img"
-    ); // Ensure the folder path for images
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true }); // Create directory if it doesn't exist
-    }
-    cb(null, uploadDir); // Specify the upload directory for images
+    const uploadDir = getLocalUploadPath("img");
+    if (!uploadDir)
+      return cb(new Error("Failed to get image upload directory."));
+    cb(null, uploadDir);
   },
   filename: (req, file, cb) => {
-    cb(null, file.originalname); // Save with the original name provided by the client
+    // Sanitize filename to prevent path traversal or invalid characters
+    const safeOriginalName = path
+      .basename(file.originalname)
+      .replace(/[^a-zA-Z0-9._-]/g, "_");
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+    cb(null, уникальныйСуффикс + "-" + safeOriginalName); // uniqueSuffix-originalName
+  },
+});
+const uploadImage = multer({
+  storage: imageStorage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith("image/")) {
+      cb(null, true);
+    } else {
+      cb(new Error("Only image files are allowed!"), false);
+    }
   },
 });
 
-const uploadImage = multer({ storage: imageStorage });
-
-// Image Upload Routes
 app.post("/uploadLogo", uploadImage.single("logo"), (req, res) => {
-  try {
-    const file = req.file;
-    if (!file) {
+  if (!req.file) {
+    return res
+      .status(400)
+      .json({
+        success: false,
+        message: "No file uploaded or invalid file type.",
+      });
+  }
+  // filePath will be just the filename, not the full server path for security.
+  // Client reconstructs URL using base path + filename if needed for display.
+  res.status(200).json({
+    success: true,
+    message: "Logo uploaded successfully",
+    fileName: req.file.filename, // Send filename back
+  });
+});
+
+app.post("/uploadSlip", uploadImage.single("slip"), (req, res) => {
+  if (!req.file) {
+    return res
+      .status(400)
+      .json({
+        success: false,
+        message: "No slip file uploaded or invalid file type.",
+      });
+  }
+  res
+    .status(200)
+    .json({
+      success: true,
+      message: "Slip uploaded successfully",
+      fileName: req.file.filename,
+    });
+});
+
+const documentStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    const uploadDir = getLocalUploadPath("doc");
+    if (!uploadDir)
+      return cb(new Error("Failed to get document upload directory."));
+    cb(null, uploadDir);
+  },
+  filename: (req, file, cb) => {
+    const safeOriginalName = path
+      .basename(file.originalname)
+      .replace(/[^a-zA-Z0-9._-]/g, "_");
+    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
+    cb(null, уникальныйСуффикс + "-" + safeOriginalName);
+  },
+});
+const uploadDocument = multer({
+  storage: documentStorage,
+  limits: { fileSize: 20 * 1024 * 1024 }, // 20MB limit for documents
+  // Add fileFilter for documents if needed (e.g., PDF, DOCX)
+});
+
+app.post("/uploadDocument", uploadDocument.single("document"), (req, res) => {
+  if (!req.file) {
+    return res
+      .status(400)
+      .json({ success: false, message: "No document file uploaded." });
+  }
+  // For local files, client would typically not get the full server path.
+  // If these files need to be served, use express.static and provide relative paths/filenames.
+  res.status(200).json({
+    success: true,
+    message: "Document uploaded successfully",
+    fileName: req.file.filename, // Send just the filename
+  });
+});
+
+// Static serving for locally uploaded images/docs IF NEEDED (consider S3 for production)
+const localUploadsDir = getLocalUploadPath(""); // Gets base 'uploads' dir
+if (localUploadsDir) {
+  app.use("/uploads", express.static(localUploadsDir));
+  console.log(`Serving local uploads from ${localUploadsDir} at /uploads`);
+}
+
+//--------------------------------------------------- S3 IMAGE UPLOAD (Preferred for Cloud) ---------------------------------------------------
+
+const createS3UploadHandler = (fieldName, s3SubFolder) => {
+  return async (req, res) => {
+    if (!req.file) {
       return res
         .status(400)
-        .json({ success: false, message: "No file uploaded" });
+        .json({ error: `No file uploaded (field '${fieldName}')` });
+    }
+    const { originalname, buffer } = req.file;
+
+    // emp_id is already decrypted by middleware
+    const empId = req.query.emp_id || (req.body && req.body.emp_id); // Prefer decrypted one
+    if (!empId) {
+      return res
+        .status(400)
+        .json({ error: "Invalid or missing emp_id (decrypted)" });
+    }
+    if (!process.env.AWS_BUCKET) {
+      console.error("AWS_BUCKET environment variable is not set.");
+      return res
+        .status(500)
+        .json({ error: "Server configuration error for S3 upload." });
     }
 
-    const filePath = file.filename;
-    res.status(200).json({
-      success: true,
-      message: "File uploaded successfully",
-      filePath,
-    });
-  } catch (error) {
-    console.error("Error handling file upload:", error.message);
-    res.status(500).json({ success: false, message: "Internal server error" });
-  }
-});
+    try {
+      const rows = await new Promise((resolve, reject) => {
+        // Using companydb for employee lookup
+        companydb.query(
+          "SELECT emp_database FROM employee WHERE emp_id = ?",
+          [empId],
+          (err, results) => (err ? reject(err) : resolve(results))
+        );
+      });
+      if (!rows || rows.length === 0) {
+        return res
+          .status(404)
+          .json({ error: `Employee not found for emp_id: ${empId}` });
+      }
+      const companyFolder = rows[0].emp_database;
+      if (!companyFolder) {
+        return res
+          .status(500)
+          .json({
+            error: `Configuration error: emp_database not found for employee ${empId}`,
+          });
+      }
+
+      const webpBuffer = await sharp(buffer).webp({ quality: 80 }).toBuffer();
+
+      let key;
+      const baseName = path
+        .basename(originalname, path.extname(originalname))
+        .replace(/[^a-zA-Z0-9_-]/g, "_"); // Sanitize basename
+      const timestamp = Date.now();
+
+      if (req.body && req.body.fileName) {
+        // If client provides a desired (sanitized) name
+        const clientFileNameBase = path
+          .basename(req.body.fileName, path.extname(req.body.fileName))
+          .replace(/[^a-zA-Z0-9_-]/g, "_");
+        key = `${companyFolder}/public/${s3SubFolder}/${clientFileNameBase}_${timestamp}.webp`;
+      } else {
+        key = `${companyFolder}/public/${s3SubFolder}/${baseName}_${timestamp}.webp`;
+      }
+
+      const cmd = new PutObjectCommand({
+        Bucket: process.env.AWS_BUCKET,
+        Key: key,
+        ContentType: "image/webp",
+        // ACL: 'public-read', // If your bucket isn't public by default and you need direct S3 URLs
+      });
+      const presignedUrl = await getSignedUrl(s3, cmd, { expiresIn: 300 }); // 5 minutes to upload
+
+      // Construct the public URL. This assumes your bucket objects are publicly readable
+      // or you are using CloudFront.
+      const publicUrl = `https://${process.env.AWS_BUCKET}.s3.${
+        process.env.AWS_REGION || "your-default-aws-region"
+      }.amazonaws.com/${key}`;
+
+      return res.json({ presignedUrl, publicUrl, key }); // Return key for easier deletion/reference
+    } catch (err) {
+      console.error(
+        `Error in S3 upload handler for ${fieldName}:`,
+        err.message,
+        err.stack
+      );
+      return res
+        .status(500)
+        .json({
+          error: err.message || "Internal server error during S3 upload",
+        });
+    }
+  };
+};
 
 app.post(
   "/uploadPackageImage",
   uploadMemory.single("packageImage"),
-  async (req, res) => {
-    // 1) ตรวจสอบไฟล์
-    if (!req.file) {
-      return res
-        .status(400)
-        .json({ error: "No file uploaded (field 'packageImage')" });
-    }
-    const { originalname, buffer } = req.file;
-
-    // 2) ถอดรหัส emp_id
-    const enc = req.query.emp_id_raw || req.query.emp_id;
-    const empId = req.query.emp_id_raw ? decryptEmpId(enc) : req.query.emp_id;
-    if (!empId) {
-      return res.status(400).json({ error: "Invalid or missing emp_id" });
-    }
-
-    try {
-      // 3) ดึง emp_database
-      const rows = await new Promise((resolve, reject) => {
-        companydb.query(
-          "SELECT emp_database FROM employee WHERE emp_id = ?",
-          [empId],
-          (err, results) => (err ? reject(err) : resolve(results))
-        );
-      });
-      if (!rows.length) {
-        return res.status(404).json({ error: "Employee not found" });
-      }
-      const companyFolder = rows[0].emp_database;
-
-      // 4) แปลงเป็น WebP (option)
-      const uploadBuffer = await sharp(buffer).webp({ quality: 80 }).toBuffer();
-
-      // 5) สร้าง S3 key: <emp_database>/public/package/<base>_<ts>.webp
-      const baseName = path.basename(originalname, path.extname(originalname));
-      const timestamp = Date.now();
-      const key = `${companyFolder}/public/package/${baseName}_${timestamp}.webp`;
-
-      // 6) สร้าง presigned URL สำหรับ PUT
-      const cmd = new PutObjectCommand({
-        Bucket: process.env.AWS_BUCKET,
-        Key: key,
-        ContentType: "image/webp",
-      });
-      const presignedUrl = await getSignedUrl(s3, cmd, { expiresIn: 900 });
-
-      // 7) สร้าง public URL (ผ่าน CloudFront หรือ S3 ตรง)
-      const publicUrl = `https://${process.env.AWS_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
-
-      return res.json({ presignedUrl, publicUrl });
-    } catch (err) {
-      console.error("Error in /uploadPackageImage:", err);
-      return res
-        .status(500)
-        .json({ error: err.message || "Internal server error" });
-    }
-  }
+  createS3UploadHandler("packageImage", "package")
 );
-
 app.post(
   "/uploadItemImage",
   uploadMemory.single("itemImage"),
-  async (req, res) => {
-    if (!req.file) {
-      return res
-        .status(400)
-        .json({ error: "No file uploaded (field 'itemImage')" });
-    }
-
-    // ถอด emp_id ปกติ
-    const enc = req.query.emp_id_raw || req.query.emp_id;
-    const empId = req.query.emp_id_raw ? decryptEmpId(enc) : req.query.emp_id;
-    if (!empId)
-      return res.status(400).json({ error: "Invalid or missing emp_id" });
-
-    try {
-      // หาชื่อโฟลเดอร์บริษัท
-      const rows = await new Promise((resolve, reject) => {
-        companydb.query(
-          "SELECT emp_database FROM employee WHERE emp_id = ?",
-          [empId],
-          (err, results) => (err ? reject(err) : resolve(results))
-        );
-      });
-      if (!rows.length)
-        return res.status(404).json({ error: "Employee not found" });
-      const companyFolder = rows[0].emp_database;
-
-      // แปลงไฟล์เป็น WebP
-      const webpBuffer = await sharp(req.file.buffer)
-        .webp({ quality: 80 })
-        .toBuffer();
-
-      // อ่านชื่อไฟล์ใหม่จาก client หรือ fallback ไปใช้ชื่อเดิม + timestamp
-      const { fileName } = req.body; // จาก FormData
-      let key;
-      if (fileName) {
-        // ถ้า client ส่งชื่อมา ก็ใช้ key นี้เลย
-        key = `${companyFolder}/public/item/${fileName.replace(
-          /\.[^/.]+$/,
-          ".webp"
-        )}`;
-      } else {
-        // ถ้าไม่ส่ง มาสร้าง key เอง
-        const originalname = req.file.originalname;
-        const baseName = path.basename(
-          originalname,
-          path.extname(originalname)
-        );
-        const timestamp = Date.now();
-        key = `${companyFolder}/public/item/${baseName}_${timestamp}.webp`;
-      }
-
-      // สร้าง presigned PUT URL
-      const cmd = new PutObjectCommand({
-        Bucket: process.env.AWS_BUCKET,
-        Key: key,
-        ContentType: "image/webp",
-      });
-      const presignedUrl = await getSignedUrl(s3, cmd, { expiresIn: 900 });
-
-      // publicUrl สำหรับบันทึกใน DB
-      const publicUrl = `https://${process.env.AWS_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
-
-      return res.json({ presignedUrl, publicUrl });
-    } catch (err) {
-      console.error("Error in /uploadItemImage:", err);
-      return res
-        .status(500)
-        .json({ error: err.message || "Internal server error" });
-    }
-  }
+  createS3UploadHandler("itemImage", "item")
 );
-
-app.post("/uploadSlip", uploadImage.single("slip"), (req, res) => {
-  try {
-    const { file } = req;
-    if (!file) {
-      return res
-        .status(400)
-        .json({ success: false, message: "No file uploaded" });
-    }
-
-    // Log the file path and other metadata if needed
-    res.status(200).json({ success: true, filePath: file.filename });
-  } catch (error) {
-    console.error("Error uploading slip:", error);
-    res.status(500).json({ success: false, message: "Internal Server Error" });
-  }
-});
-
-// Updated /uploadVerifyImg endpoint: logs full errors for easier debugging
 app.post(
   "/uploadVerifyImg",
   uploadMemory.single("verifyImg"),
-  async (req, res) => {
-    // 1) Ensure file present
-    if (!req.file) {
-      return res
-        .status(400)
-        .json({ error: "No file uploaded. Ensure field name is 'verifyImg'." });
-    }
+  createS3UploadHandler("verifyImg", "verify")
+); // 'uploads' was original prefix, changed to 'verify'
 
-    const { originalname, buffer } = req.file;
-    // 2) Determine encrypted vs. decrypted emp_id
-    const encryptedEmpId = req.query.emp_id_raw || req.query.emp_id;
-    let decryptedEmpId;
-
-    if (req.query.emp_id_raw) {
-      decryptedEmpId = decryptEmpId(encryptedEmpId);
-      if (!decryptedEmpId) {
-        return res.status(400).json({ error: "Invalid emp_id provided" });
-      }
-    } else if (req.query.emp_id) {
-      // Already decrypted by middleware
-      decryptedEmpId = req.query.emp_id;
-    } else {
-      return res.status(400).json({ error: "emp_id is required" });
-    }
-
-    try {
-      // 3) Lookup emp_database to form S3 folder
-      const rows = await new Promise((resolve, reject) => {
-        companydb.query(
-          "SELECT emp_database FROM employee WHERE emp_id = ?",
-          [decryptedEmpId],
-          (err, results) => (err ? reject(err) : resolve(results))
-        );
-      });
-
-      if (!rows || rows.length === 0) {
-        return res.status(404).json({ error: "Employee not found" });
-      }
-      const companyFolder = rows[0].emp_database;
-
-      // 4) Convert to WebP
-      const webpBuffer = await sharp(buffer).webp({ quality: 80 }).toBuffer();
-
-      // 5) Generate S3 key
-      const baseName = path.basename(originalname, path.extname(originalname));
-      const prefix = process.env.AWS_S3_PREFIX || "uploads";
-      const s3Key = `${companyFolder}/${prefix}/${baseName}.webp`;
-
-      // 6) Create presigned PUT URL
-      const putCommand = new PutObjectCommand({
-        Bucket: process.env.AWS_BUCKET,
-        Key: s3Key,
-        ContentType: "image/webp",
-      });
-      const presignedUrl = await getSignedUrl(s3, putCommand, {
-        expiresIn: 900,
-      });
-      const publicUrl = `https://${process.env.AWS_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/${s3Key}`;
-
-      return res.json({ presignedUrl, publicUrl });
-    } catch (err) {
-      console.error("Error in /uploadVerifyImg:", err);
-      // Send full error message back for debugging
-      return res
-        .status(500)
-        .json({ error: err.message || "Internal server error" });
-    }
-  }
-);
+// DELETING LOCAL FILES (These routes are problematic on ephemeral filesystems like Railway)
+// Consider if these are still needed or if S3 deletion is primary.
+// If keeping, ensure photo_url is just the filename for local files.
 
 app.post("/deleteLogoImages", (req, res) => {
-  try {
-    // Define the directory where the images are stored
-    const { photo_url } = req.body;
-    const directoryPath = path.join(
-      process.env.RAILWAY_VOLUME_MOUNT_PATH,
-      "uploads",
-      "img"
-    ); // Replace "uploads" with your directory
-    if (fs.existsSync(directoryPath)) {
-      // Read all files in the directory
-      fs.readdir(directoryPath, (err, files) => {
-        if (err) {
-          console.error("Error reading directory:", err);
-          return res
-            .status(500)
-            .json({ success: false, message: "Error reading directory" });
-        }
+  // Assumes photo_url is a filename prefix for local files
+  if (!req.body || typeof req.body.photo_url !== "string") {
+    return res
+      .status(400)
+      .json({ success: false, message: "photo_url (string) is required." });
+  }
+  const { photo_url } = req.body;
+  const imgDir = getLocalUploadPath("img");
+  if (!imgDir)
+    return res
+      .status(500)
+      .json({ success: false, message: "Image directory not configured." });
 
-        // Filter files starting with "logo"
-        const logoFiles = files.filter((file) => file.startsWith(photo_url));
-        // Delete each matching file
-        if (logoFiles.length > 0) {
-          const filePath = path.join(directoryPath, logoFiles[0]);
-          fs.unlink(filePath, (err) => {
-            if (err) {
-              console.error(`Error deleting file ${logoFiles[0]}:`, err);
-            } else {
-              console.log(`Deleted file: ${logoFiles[0]}`);
-            }
-          });
+  try {
+    if (fs.existsSync(imgDir)) {
+      const files = fs.readdirSync(imgDir);
+      const logoFiles = files.filter((file) => file.startsWith(photo_url));
+      let deletedCount = 0;
+      logoFiles.forEach((file) => {
+        try {
+          fs.unlinkSync(path.join(imgDir, file));
+          console.log(`Locally deleted file: ${file}`);
+          deletedCount++;
+        } catch (e) {
+          console.error(`Error deleting local file ${file}:`, e.message);
         }
-        res.status(200).json({
+      });
+      res
+        .status(200)
+        .json({
           success: true,
-          message: `Deleted ${logoFiles.length} logo image(s)`,
+          message: `Attempted to delete ${logoFiles.length} local logo image(s), successfully deleted ${deletedCount}.`,
         });
-      });
     } else {
-      res.status(200).json({
-        success: true,
-        message: `Deleted 0 logo image(s)`,
-      });
+      res
+        .status(200)
+        .json({
+          success: true,
+          message: "Image directory does not exist, 0 files deleted.",
+        });
     }
   } catch (error) {
-    console.error("Error handling delete request:", error.message);
-    res.status(500).json({ success: false, message: "Internal server error" });
+    console.error(
+      "Error handling local deleteLogoImages request:",
+      error.message
+    );
+    res
+      .status(500)
+      .json({
+        success: false,
+        message: "Internal server error during local file deletion.",
+      });
   }
 });
 
+// This route is identical to deleteLogoImages logic-wise, might be redundant
 app.post("/deletePackageImages", (req, res) => {
+  if (!req.body || typeof req.body.photo_url !== "string") {
+    return res
+      .status(400)
+      .json({ success: false, message: "photo_url (string) is required." });
+  }
+  const { photo_url } = req.body;
+  const imgDir = getLocalUploadPath("img");
+  if (!imgDir)
+    return res
+      .status(500)
+      .json({ success: false, message: "Image directory not configured." });
+
   try {
-    // Define the directory where the images are stored
-    const { photo_url } = req.body;
-    const directoryPath = path.join(
-      process.env.RAILWAY_VOLUME_MOUNT_PATH,
-      "uploads",
-      "img"
-    ); // Replace "uploads" with your directory
-    // Read all files in the directory
-
-    fs.readdir(directoryPath, (err, files) => {
-      if (err) {
-        console.error("Error reading directory:", err);
-        return res
-          .status(500)
-          .json({ success: false, message: "Error reading directory" });
-      }
-
-      // Filter files starting with "logo"
-      const logoFiles = files.filter((file) => file.startsWith(photo_url));
-      // Delete each matching file
-      logoFiles.forEach((file) => {
-        const filePath = path.join(directoryPath, file);
-        fs.unlink(filePath, (err) => {
-          if (err) {
-            console.error(`Error deleting file ${filePath}:`, err);
-          } else {
-            console.log(`Deleted file: ${filePath}`);
-          }
+    if (fs.existsSync(imgDir)) {
+      const files = fs.readdirSync(imgDir);
+      const packageFiles = files.filter((file) => file.startsWith(photo_url)); // Assuming prefix match
+      let deletedCount = 0;
+      packageFiles.forEach((file) => {
+        try {
+          fs.unlinkSync(path.join(imgDir, file));
+          console.log(`Locally deleted package image: ${file}`);
+          deletedCount++;
+        } catch (e) {
+          console.error(
+            `Error deleting local package image ${file}:`,
+            e.message
+          );
+        }
+      });
+      res
+        .status(200)
+        .json({
+          success: true,
+          message: `Attempted to delete ${packageFiles.length} local package image(s), successfully deleted ${deletedCount}.`,
         });
-      });
-      res.status(200).json({
-        success: true,
-        message: `Deleted ${logoFiles.length} logo image(s)`,
-      });
-    });
+    } else {
+      res
+        .status(200)
+        .json({
+          success: true,
+          message: "Image directory does not exist, 0 files deleted.",
+        });
+    }
   } catch (error) {
-    console.error("Error handling delete request:", error.message);
-    res.status(500).json({ success: false, message: "Internal server error" });
+    console.error(
+      "Error handling local deletePackageImages request:",
+      error.message
+    );
+    res
+      .status(500)
+      .json({
+        success: false,
+        message: "Internal server error during local file deletion.",
+      });
   }
 });
 
 app.post("/deleteImagesByName", (req, res) => {
-  try {
-    const { photo_url } = req.body; // Expecting an array of filenames from the client
-    // Define the directory where the images are stored
-    const directoryPath = path.join(
-      process.env.RAILWAY_VOLUME_MOUNT_PATH,
-      "uploads",
-      "img"
-    ); // Replace with your directory
-    // Iterate through the provided filenames and delete them
-    if (photo_url !== undefined) {
-      const filePath = path.join(directoryPath, photo_url);
-      // Check if the file exists before attempting to delete
+  // Deletes a single local file by exact name
+  if (!req.body || typeof req.body.photo_url !== "string") {
+    return res
+      .status(400)
+      .json({
+        success: false,
+        message: "photo_url (filename string) is required.",
+      });
+  }
+  const { photo_url: fileName } = req.body;
+  const imgDir = getLocalUploadPath("img"); // Assuming images are in 'img' subfolder
+  if (!imgDir)
+    return res
+      .status(500)
+      .json({ success: false, message: "Image directory not configured." });
 
-      if (fs.existsSync(filePath)) {
-        fs.unlink(filePath, (err) => {
-          if (err) {
-            console.error(`Error deleting file ${photo_url}:`, err.message);
-          } else {
-            console.log(`Deleted file: ${photo_url}`);
-          }
+  const filePath = path.join(imgDir, path.basename(fileName)); // Sanitize to prevent path traversal
+
+  try {
+    if (fs.existsSync(filePath)) {
+      fs.unlinkSync(filePath);
+      console.log(`Locally deleted file by name: ${fileName}`);
+      res
+        .status(200)
+        .json({
+          success: true,
+          message: `Local file ${fileName} deleted successfully.`,
         });
-      }
+    } else {
+      res
+        .status(404)
+        .json({ success: false, message: `Local file ${fileName} not found.` });
     }
-    res.status(200).json({
-      success: true,
-      message: `Deleted file successfully`,
-    });
   } catch (error) {
-    console.error("Error handling delete request:", error.message);
-    res.status(500).json({ success: false, message: "Internal server error" });
-  }
-});
-//--------------------------------------------------- DOCUMENT UPLOAD ---------------------------------------------------
-
-app.use(
-  "/uploads/img",
-  express.static(
-    path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads", "img")
-  )
-);
-
-// Enhanced storage configuration
-const documentStorage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    const uploadDir = path.join(
-      process.env.RAILWAY_VOLUME_MOUNT_PATH,
-      "uploads",
-      "doc"
+    console.error(
+      "Error handling local deleteImagesByName request:",
+      error.message
     );
-    if (!fs.existsSync(uploadDir)) {
-      fs.mkdirSync(uploadDir, { recursive: true });
-    }
-    cb(null, uploadDir);
-  },
-  filename: (req, file, cb) => {
-    // Replace forbidden characters
-    const sanitizedFilename = file.originalname.replace(/[:<>|?*"]/g, "_");
-    console.log("Sanitized filename:", sanitizedFilename);
-    cb(null, sanitizedFilename);
-  },
-});
-
-const uploadDocument = multer({ storage: documentStorage });
-
-app.post("/uploadDocument", uploadDocument.single("document"), (req, res) => {
-  try {
-    const file = req.file;
-    if (!file) {
-      console.error("No file received");
-      return res
-        .status(400)
-        .json({ success: false, message: "No file uploaded" });
-    }
-
-    // Failsafe: Check directory existence after upload
-    const uploadDir = path.resolve(
-      process.env.RAILWAY_VOLUME_MOUNT_PATH,
-      "uploads",
-      "doc"
-    );
-    if (!fs.existsSync(uploadDir)) {
-      console.error("Upload directory missing after upload:", uploadDir);
-      throw new Error("Upload directory vanished unexpectedly.");
-    }
-
-    const savedPath = path.join(
-      process.env.RAILWAY_VOLUME_MOUNT_PATH,
-      "uploads",
-      "doc",
-      file.originalname
-    );
-    console.log("File saved successfully at:", savedPath);
-
-    res.status(200).json({
-      success: true,
-      message: "File uploaded successfully",
-      filePath: savedPath,
-    });
-  } catch (error) {
-    console.error("Error during Multer upload:", error.message);
-    res.status(500).json({ success: false, message: "Internal server error" });
+    res
+      .status(500)
+      .json({
+        success: false,
+        message: "Internal server error during local file deletion.",
+      });
   }
 });
 
-// มั่วอันนี้
+// Example search (ensure DB is switched if needed)
 app.get("/searchByTracking", async (req, res) => {
-  const { trackingNumber } = req.query;
-
+  const { trackingNumber, emp_id } = req.query;
+  if (!trackingNumber) {
+    return res.status(400).json({ error: "trackingNumber is required." });
+  }
   try {
-    // Example query
-    const result = await db.query(
-      `
-            SELECT customers.customer_id, customers.contact, customers.type, customers.level, customers.note
-            FROM customers
-            INNER JOIN packages ON customers.customer_id = packages.customer_id
-            WHERE packages.tracking_number = ?
-        `,
+    await switchToEmployeeDB(emp_id); // Switch DB based on logged-in user
+    const results = await q(
+      `SELECT c.customer_id, c.contact, c.type, c.level, c.note
+       FROM customers c
+       INNER JOIN packages p ON c.customer_id = p.customer_id
+       WHERE p.tracking_number = ?`,
       [trackingNumber]
     );
-
-    // Convert result to plain JSON
-    const plainResult = JSON.parse(JSON.stringify(result));
-    res.json(plainResult);
-  } catch (error) {
-    console.error("Error fetching customer by tracking number:", error);
-    res.status(500).send("Error fetching customer");
+    if (results.length === 0) {
+      return res
+        .status(404)
+        .json({ error: "No customer found for this tracking number." });
+    }
+    res.json(results); // Returns array of customers (usually one)
+  } catch (e) {
+    console.error(
+      "Error in /searchByTracking:",
+      e.msg || e.message,
+      e.err || ""
+    );
+    res
+      .status(e.status || 500)
+      .json({ error: e.msg || "Error fetching customer by tracking number" });
   }
 });
 
-const PORT = 3001;
+// Global error handler (simple version)
+app.use((err, req, res, next) => {
+  console.error("Unhandled error:", err.stack);
+  // Avoid sending stack trace in production
+  const errorMessage =
+    process.env.NODE_ENV === "production"
+      ? "An unexpected error occurred."
+      : err.message;
+  res
+    .status(err.status || 500)
+    .json({
+      error: errorMessage,
+      ...(process.env.NODE_ENV !== "production" && { stack: err.stack }),
+    });
+});
+
+const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
-  console.log(`Server is running on ${PORT}`);
+  console.log(`Server is running on port ${PORT}`);
 });
