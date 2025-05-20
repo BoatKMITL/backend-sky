@@ -744,20 +744,39 @@ app.post("/addpackage", (req, res) => {
     customer_id === "MISSINGITEMS" ? null : customer_id;
   const tracking_number = req.body.tracking_number;
   const photo_url = req.body.photo_url;
-  const query1 =
-    "INSERT INTO `packages` (`tracking_number`, `customer_id`, `photo_url`) VALUES (?, ?, ?);";
-  db.query(
-    query1,
-    [tracking_number, processedcustomer_id, photo_url],
-    (err, results) => {
-      if (err) {
-        console.error("Error fetching data:", err.message);
-        res.status(500).json({ error: "Failed to fetch data" });
-      } else {
-        res.send("Values Edited");
+  if (req.body.subbox_cost !== undefined) {
+    const subbox_cost = req.body.subbox_cost;
+    const query1 =
+      "INSERT INTO `packages` (`tracking_number`, `customer_id`, `subbox_cost`, `photo_url`) VALUES (?, ?, ?);";
+    db.query(
+      query1,
+      [tracking_number, processedcustomer_id, subbox_cost, photo_url],
+      (err, results) => {
+        if (err) {
+          console.error("Error fetching data:", err.message);
+          res.status(500).json({ error: "Failed to fetch data" });
+        } else {
+          res.send("Values Edited");
+        }
       }
-    }
-  );
+    );
+  } else {
+    const query2 =
+      "INSERT INTO `packages` (`tracking_number`, `customer_id`, `photo_url`) VALUES (?, ?, ?);";
+    db.query(
+      query2,
+      [tracking_number, processedcustomer_id, photo_url],
+      (err, results) => {
+        if (err) {
+          console.error("Error fetching data:", err.message);
+          res.status(500).json({ error: "Failed to fetch data" });
+        } else {
+          res.send("Values Edited");
+        }
+      }
+    );
+  }
+  
 });
 
 app.post("/editpackage", (req, res) => {
