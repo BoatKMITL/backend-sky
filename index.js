@@ -20,15 +20,21 @@ const requiredEnvVars = [
   "AWS_SECRET_KEY",
   "AWS_BUCKET",
   "EMP_ID_KEY",
-  "RAILWAY_VOLUME_MOUNT_PATH",
+  "RAILWAY_VOLUME_MOUNT_PATH", // Crucial for file-based settings/local uploads
 ];
 for (const envVar of requiredEnvVars) {
   if (!process.env[envVar]) {
     console.warn(`Warning: Environment variable ${envVar} is not set.`);
-    // Depending on the variable, you might want to throw an error and exit
-    // if (envVar === "RAILWAY_VOLUME_MOUNT_PATH") { // Example critical var
-    //   throw new Error(`${envVar} is required and not set.`);
-    // }
+    // If RAILWAY_VOLUME_MOUNT_PATH is essential for your app's core functionality
+    // (e.g., settings files MUST be on a volume), make it a fatal error.
+    if (envVar === "RAILWAY_VOLUME_MOUNT_PATH") {
+      // Check if local file features are actually used. If only S3 is used, this might not be critical.
+      // For this app, it seems settings files depend on it.
+      console.error(
+        `FATAL: Environment variable ${envVar} is required for file-based settings and local uploads, but it's not set. Ensure a volume is attached in Railway if these features are needed.`
+      );
+      process.exit(1); // Exit if critical FS path is missing
+    }
   }
 }
 
@@ -50,7 +56,7 @@ if (process.env.AWS_ACCESS_KEY && process.env.AWS_SECRET_KEY) {
   };
 } else {
   console.warn(
-    "AWS credentials (AWS_ACCESS_KEY, AWS_SECRET_KEY) are not set. S3 operations might fail if IAM roles are not configured."
+    "AWS credentials (AWS_ACCESS_KEY, AWS_SECRET_KEY) are not set. S3 operations might fail if IAM roles are not configured properly on Railway (less common for direct S3 SDK use)."
   );
 }
 
@@ -81,12 +87,8 @@ app.use((req, _res, next) => {
   if (req.query.emp_id) {
     const plain = decryptEmpId(req.query.emp_id);
     if (plain) {
-      req.query.emp_id_raw = req.query.emp_id; // เก็บต้นฉบับเผื่ออยากใช้
-      req.query.emp_id = plain; // เขียนทับ → โค้ดเดิมใช้ได้ทันที
-    } else {
-      // Optional: handle invalid encrypted emp_id in query
-      // console.warn("Failed to decrypt emp_id from query:", req.query.emp_id);
-      // req.query.emp_id = null; // Or remove it, or send an error
+      req.query.emp_id_raw = req.query.emp_id;
+      req.query.emp_id = plain;
     }
   }
   if (req.body && req.body.emp_id) {
@@ -94,10 +96,6 @@ app.use((req, _res, next) => {
     if (plain) {
       req.body.emp_id_raw = req.body.emp_id;
       req.body.emp_id = plain;
-    } else {
-      // Optional: handle invalid encrypted emp_id in body
-      // console.warn("Failed to decrypt emp_id from body:", req.body.emp_id);
-      // req.body.emp_id = null;
     }
   }
   next();
@@ -113,22 +111,30 @@ const dbConfig = {
 };
 
 const db = mysql.createConnection(dbConfig);
-const companydb = mysql.createConnection(dbConfig); // Assuming companydb uses the same initial credentials
+const companydb = mysql.createConnection(dbConfig);
+
+// Make DB connections critical for startup
+let dbConnected = false;
+let companyDbConnected = false;
 
 db.connect((err) => {
   if (err) {
-    console.error("Error connecting to main DB:", err.stack);
-    return;
+    console.error("FATAL: Error connecting to main DB:", err.stack);
+    process.exit(1); // Exit if DB connection fails
   }
   console.log("Connected to main DB as id", db.threadId);
+  dbConnected = true;
+  startServerIfReady();
 });
 
 companydb.connect((err) => {
   if (err) {
-    console.error("Error connecting to company DB:", err.stack);
-    return;
+    console.error("FATAL: Error connecting to company DB:", err.stack);
+    process.exit(1); // Exit if DB connection fails
   }
   console.log("Connected to company DB as id", companydb.threadId);
+  companyDbConnected = true;
+  startServerIfReady();
 });
 
 /**
@@ -140,10 +146,11 @@ function extractS3KeyFromUrl(url) {
   if (!url || typeof url !== "string") return null;
   try {
     const urlObject = new URL(url);
-    if (urlObject.hostname.endsWith(".amazonaws.com")) {
+    // More robust check for S3 hostnames
+    if (urlObject.hostname.includes(".s3.") && urlObject.hostname.endsWith(".amazonaws.com")) {
       return urlObject.pathname.startsWith("/")
-        ? urlObject.pathname.substring(1)
-        : urlObject.pathname;
+        ? decodeURIComponent(urlObject.pathname.substring(1)) // Decode URI component for keys with spaces/special chars
+        : decodeURIComponent(urlObject.pathname);
     }
     return null;
   } catch (e) {
@@ -175,7 +182,8 @@ async function deleteS3Object(s3Key) {
     await s3.send(command);
     console.log(`ลบอ็อบเจกต์ S3 สำเร็จ: ${s3Key}`);
   } catch (error) {
-    console.error(`ไม่สามารถลบอ็อบเจกต์ S3 ${s3Key}:`, error.message);
+    console.error(`ไม่สามารถลบอ็อบเจกต์ S3 ${s3Key}:`, error.message, error.stack);
+    // Optionally re-throw or handle more gracefully depending on context
   }
 }
 
@@ -189,8 +197,7 @@ function q(sql, params = []) {
 function switchToEmployeeDB(emp_id) {
   return new Promise((resolve, reject) => {
     if (!emp_id) {
-      // console.log("No emp_id provided, not switching DB.");
-      return resolve(); // ไม่ได้ส่ง emp_id มาก็ไม่ต้องสลับ DB
+      return resolve();
     }
 
     companydb.query(
@@ -211,7 +218,6 @@ function switchToEmployeeDB(emp_id) {
 
         const { emp_database, emp_datapass } = rows[0];
         if (!emp_database || !emp_datapass) {
-          // Added check for null/empty credentials
           return reject({
             status: 500,
             msg: `Database credentials not found for employee: ${emp_id}`,
@@ -231,8 +237,7 @@ function switchToEmployeeDB(emp_id) {
                 msg: `Failed to switch database to ${emp_database}`,
                 err: changeErr,
               });
-            // console.log(`Switched DB connection to ${emp_database} for emp_id: ${emp_id}`);
-            resolve(); // สลับสำเร็จ
+            resolve();
           }
         );
       }
@@ -253,7 +258,6 @@ app.post("/login", (req, res) => {
   if (!req.body) {
     return res.status(400).json({ error: "Request body is missing" });
   }
-  // emp_id in body is already decrypted by middleware if it was encrypted
   const byEmpId = req.body.emp_id !== undefined && req.body.emp_id !== null;
 
   let sql, params;
@@ -262,11 +266,9 @@ app.post("/login", (req, res) => {
     params = [req.body.emp_id];
   } else {
     if (req.body.username === undefined || req.body.password === undefined) {
-      return res
-        .status(400)
-        .json({
-          error: "Username and password are required for standard login",
-        });
+      return res.status(400).json({
+        error: "Username and password are required for standard login",
+      });
     }
     sql = "SELECT * FROM `employee` WHERE `username` = ? AND `password` = ?";
     params = [req.body.username, req.body.password];
@@ -289,11 +291,9 @@ app.post("/login", (req, res) => {
       console.error(
         `Missing database credentials for employee: ${employee.emp_id}`
       );
-      return res
-        .status(500)
-        .json({
-          error: "Configuration error: Employee database details are missing.",
-        });
+      return res.status(500).json({
+        error: "Configuration error: Employee database details are missing.",
+      });
     }
 
     db.changeUser(
@@ -310,7 +310,7 @@ app.post("/login", (req, res) => {
           );
           return res.status(500).json({ error: "Failed to switch database" });
         }
-        return res.json(results); // Send original employee data
+        return res.json(results);
       }
     );
   });
@@ -318,7 +318,6 @@ app.post("/login", (req, res) => {
 
 app.post("/logout", (req, res) => {
   db.changeUser(
-    // Revert to default credentials
     {
       user: dbConfig.user,
       password: dbConfig.password,
@@ -342,8 +341,6 @@ app.post("/logout", (req, res) => {
 // Home-------------------------------------------------------------------------------------------------------------------
 app.get("/allcustomers", async (req, res) => {
   try {
-    // This query seems complex and might be inefficient on large datasets. Consider optimizing.
-    // The original query for /allcustomers had a complex subquery.
     const rows = await q(
       "SELECT c.*, COUNT( CASE WHEN NOT EXISTS ( SELECT 1 FROM items AS i WHERE i.tracking_number = p.tracking_number GROUP BY i.tracking_number HAVING MIN(i.item_status) = 1 AND MAX(i.item_status) = 1 ) THEN p.tracking_number END ) AS package_count FROM customers AS c LEFT JOIN packages AS p ON c.customer_id = p.customer_id GROUP BY c.customer_id ORDER BY c.customer_date DESC;"
     );
@@ -357,21 +354,15 @@ app.get("/allcustomers", async (req, res) => {
 app.get("/customers", async (req, res) => {
   const sql = `
       SELECT c.*,
-             COUNT(DISTINCT p.tracking_number) AS package_count 
-             /* Using DISTINCT for package_count to avoid issues if items join multiplies rows */
+             COUNT(DISTINCT p.tracking_number) AS package_count
       FROM customers c
       LEFT JOIN packages p ON c.customer_id = p.customer_id
-      /* 
-        The NOT EXISTS condition seems to exclude customers if ALL their packages have ALL items with status 1.
-        If a customer has one package fully status 1, and another package not, they might still appear.
-        Clarify the exact logic needed for "package_count" if this isn't intended.
-      */
-      WHERE (p.tracking_number IS NULL OR NOT EXISTS ( 
+      WHERE (p.tracking_number IS NULL OR NOT EXISTS (
           SELECT 1
           FROM items i
           WHERE i.tracking_number = p.tracking_number
           GROUP BY i.tracking_number
-          HAVING MIN(i.item_status) = 1 AND MAX(i.item_status) = 1 
+          HAVING MIN(i.item_status) = 1 AND MAX(i.item_status) = 1
       ))
       GROUP BY c.customer_id
       ORDER BY c.customer_date DESC
@@ -385,7 +376,6 @@ app.get("/customers", async (req, res) => {
   }
 });
 
-/* --------------------- 3. /deleteCustomer (with Tx) --------------------- */
 app.post("/deleteCustomer", async (req, res) => {
   if (!req.body || !req.body.customer_id) {
     return res
@@ -451,8 +441,6 @@ app.post("/deleteCustomer", async (req, res) => {
       ];
 
       for (const sql of statements) {
-        // All these statements use customer_id as the parameter.
-        // If any used a different parameter, it would need adjustment.
         await q(sql, [customer_id]);
       }
 
@@ -472,27 +460,31 @@ app.post("/deleteCustomer", async (req, res) => {
         });
       });
     } catch (err) {
-      console.error("Tx query error during customer deletion:", err.message);
+      console.error("Tx query error during customer deletion:", err.message, err.stack);
       db.rollback(() =>
         res.status(500).json({
           success: false,
           message: "Failed to delete customer and associated data",
-          error: err.message, // Provide error message for debugging
+          error: err.message,
         })
       );
     }
   });
 });
 
+// ... (Keep other routes as they are, they mostly use async/await and q)
+// Search for `getLocalUploadPath` and `imageStorage` / `documentStorage`
+// to find the parts related to local file system that need attention for Railway.
+
 // Customer-------------------------------------------------------------------------------------------------------------------
 app.get("/customersDetails", async (req, res) => {
-  const { id, emp_id } = req.query; // emp_id is already decrypted by middleware
+  const { id, emp_id } = req.query; 
 
   if (!id)
     return res.status(400).json({ error: "customer_id (id) is required" });
 
   try {
-    await switchToEmployeeDB(emp_id); // emp_id can be null/undefined, switchToEmployeeDB handles it
+    await switchToEmployeeDB(emp_id); 
     const rows = await q("SELECT * FROM customers WHERE customer_id = ?", [id]);
     if (!rows || rows.length === 0) {
       return res.status(404).json({ error: "Customer details not found" });
@@ -511,13 +503,13 @@ app.get("/customersDetails", async (req, res) => {
 });
 
 app.get("/addressesinfo", async (req, res) => {
-  const { id, emp_id } = req.query; // emp_id for potential DB switch
+  const { id, emp_id } = req.query; 
 
   if (!id)
     return res.status(400).json({ error: "address_id (id) is required" });
 
   try {
-    await switchToEmployeeDB(emp_id); // Switch DB if emp_id is provided
+    await switchToEmployeeDB(emp_id); 
     const rows = await q("SELECT * FROM addresses WHERE address_id = ?", [id]);
     if (!rows || rows.length === 0) {
       return res.status(404).json({ error: "Address info not found" });
@@ -540,7 +532,6 @@ app.get("/customersaddresses", async (req, res) => {
   try {
     await switchToEmployeeDB(emp_id);
     const rows = await q("SELECT * FROM addresses WHERE customer_id = ?", [id]);
-    // It's okay if a customer has no addresses, return empty array.
     return res.json(rows);
   } catch (e) {
     console.error(
@@ -563,7 +554,7 @@ app.get("/customerspackages", async (req, res) => {
     const sql = `
       SELECT
         p.*,
-        p.Date_create AS received_date, /* Ensure Date_create column exists and is populated */
+        p.Date_create AS received_date, 
         COALESCE(SUM(CASE WHEN i.item_status = 0 THEN 1 ELSE 0 END), 0) AS sum0,
         COALESCE(SUM(CASE WHEN i.item_status = 1 THEN 1 ELSE 0 END), 0) AS sum1
       FROM packages p
@@ -571,8 +562,8 @@ app.get("/customerspackages", async (req, res) => {
       WHERE ${
         processedId === null ? "p.customer_id IS NULL" : "p.customer_id = ?"
       }
-      GROUP BY p.tracking_number, p.Date_create /* Added p.Date_create to GROUP BY for SQL standard */
-      ORDER BY p.Date_create DESC; /* Assuming Date_create is how you want to order */
+      GROUP BY p.tracking_number, p.Date_create 
+      ORDER BY p.Date_create DESC; 
     `;
     const params = processedId === null ? [] : [processedId];
     const rows = await q(sql, params);
@@ -590,7 +581,6 @@ app.get("/customerspackages", async (req, res) => {
 });
 
 app.get("/nullpackages", async (req, res) => {
-  // Added emp_id for consistency
   const { emp_id } = req.query;
   try {
     await switchToEmployeeDB(emp_id);
@@ -633,12 +623,10 @@ app.post("/additems", async (req, res) => {
   const { customer_id, tracking_number, items, emp_id } = req.body;
 
   if (!customer_id || !tracking_number || !Array.isArray(items)) {
-    return res
-      .status(400)
-      .json({
-        error:
-          "Missing or invalid data: customer_id, tracking_number, or items array is required.",
-      });
+    return res.status(400).json({
+      error:
+        "Missing or invalid data: customer_id, tracking_number, or items array is required.",
+    });
   }
 
   const values = items
@@ -654,20 +642,17 @@ app.post("/additems", async (req, res) => {
       tracking_number,
       it.name.trim(),
       it.mainCategory.trim(),
-      it.subCategory?.trim() ?? "", // Ensure subCategory is also trimmed if present
+      it.subCategory?.trim() ?? "", 
       Number(it.quantity) || 0,
       Number(it.weight) || 0,
-      null, // packer_id
+      null, 
       it.photo_url || null,
     ]);
 
   if (values.length === 0) {
-    return res
-      .status(400)
-      .json({
-        error:
-          "No valid items to insert. Ensure item has name and mainCategory.",
-      });
+    return res.status(400).json({
+      error: "No valid items to insert. Ensure item has name and mainCategory.",
+    });
   }
 
   try {
@@ -706,7 +691,6 @@ app.post("/edititem", async (req, res) => {
   } = req.body;
 
   if (!item_id || !item_name || !item_type) {
-    // Basic validation
     return res
       .status(400)
       .json({ error: "Missing required data: item_id, item_name, item_type." });
@@ -779,8 +763,6 @@ app.post("/deleteitem", async (req, res) => {
           item_id,
         ]);
         if (deleteResult.affectedRows === 0) {
-          // Item not found, or already deleted. Consider how to handle.
-          // Maybe rollback and send 404, or commit and inform. For now, proceed.
           console.warn(
             `Item with id ${item_id} not found for deletion or already deleted.`
           );
@@ -788,7 +770,6 @@ app.post("/deleteitem", async (req, res) => {
 
         let message = "Item deleted successfully.";
         if (customer_id) {
-          // Only update customer status if customer_id is provided
           const [{ count }] = await q(
             `SELECT COUNT(*) AS count
              FROM items i
@@ -799,7 +780,7 @@ app.post("/deleteitem", async (req, res) => {
 
           if (count === 0) {
             await q(
-              "UPDATE customers SET status = NULL WHERE customer_id = ? AND (status = 'Warehouse' OR status IS NULL)", // More specific update
+              "UPDATE customers SET status = NULL WHERE customer_id = ? AND (status = 'Warehouse' OR status IS NULL)", 
               [customer_id]
             );
             message = "Item deleted and customer status potentially updated.";
@@ -818,7 +799,7 @@ app.post("/deleteitem", async (req, res) => {
           return res.json({ message });
         });
       } catch (err) {
-        console.error("Error during /deleteitem transaction:", err.message);
+        console.error("Error during /deleteitem transaction:", err.message, err.stack);
         db.rollback(() =>
           res
             .status(500)
@@ -827,7 +808,6 @@ app.post("/deleteitem", async (req, res) => {
       }
     });
   } catch (e) {
-    // Catch errors from switchToEmployeeDB
     console.error(
       "Error switching DB for /deleteitem:",
       e.msg || e.message,
@@ -838,8 +818,6 @@ app.post("/deleteitem", async (req, res) => {
       .json({ error: e.msg || "DB switch failed" });
   }
 });
-
-// เเก้ไขต่อด้านล่าง (These routes use callbacks, consider refactoring to async/await q())
 
 app.post("/editwarehouse", async (req, res) => {
   if (!req.body)
@@ -873,7 +851,6 @@ app.post("/createcus", async (req, res) => {
   const { customer_id: id, contact, type, level, note, emp_id } = req.body;
 
   if (!id || !contact) {
-    // Example: id and contact are mandatory
     return res
       .status(400)
       .json({ error: "customer_id and contact are required." });
@@ -912,7 +889,6 @@ app.post("/editcus", async (req, res) => {
   } = req.body;
 
   if (!old_id || !id || !contact) {
-    // Example: old_id, new id, and contact are mandatory
     return res
       .status(400)
       .json({ error: "old_id, customer_id, and contact are required." });
@@ -1000,7 +976,8 @@ app.post("/editaddr", async (req, res) => {
     state,
     country,
     zipcode,
-    emp_id,
+    emp_id, // Added emp_id
+    email // Added email
   } = req.body;
 
   if (
@@ -1019,7 +996,7 @@ app.post("/editaddr", async (req, res) => {
   try {
     await switchToEmployeeDB(emp_id);
     await q(
-      "UPDATE `addresses` SET `recipient_name` = ?, `phone` = ?, `address` = ?, `city` = ?, `state` = ?, `country` = ?, `zipcode` = ? WHERE `address_id` = ?;",
+      "UPDATE `addresses` SET `recipient_name` = ?, `phone` = ?, `address` = ?, `city` = ?, `state` = ?, `country` = ?, `zipcode` = ?, `email` = ? WHERE `address_id` = ?;", // Added email to update
       [
         recipient_name,
         phone,
@@ -1028,6 +1005,7 @@ app.post("/editaddr", async (req, res) => {
         state,
         country,
         zipcode,
+        email, // Added email param
         address_id,
       ]
     );
@@ -1076,7 +1054,6 @@ app.post("/addpackage", async (req, res) => {
     req.body;
 
   if (!tracking_number) {
-    // tracking_number is essential
     return res.status(400).json({ error: "tracking_number is required." });
   }
   const processedcustomer_id =
@@ -1119,12 +1096,10 @@ app.post("/editpackage", async (req, res) => {
   const { old_id, customer_id, tracking_number, photo_url, emp_id } = req.body;
 
   if (!old_id || !tracking_number) {
-    return res
-      .status(400)
-      .json({
-        error:
-          "old_id (original tracking number) and new tracking_number are required.",
-      });
+    return res.status(400).json({
+      error:
+        "old_id (original tracking number) and new tracking_number are required.",
+    });
   }
   const processedcustomer_id =
     customer_id === "MISSINGITEMS" ||
@@ -1200,7 +1175,6 @@ app.post("/deletepackage", async (req, res) => {
         );
 
         if (packageDeleteResult.affectedRows === 0) {
-          // Package not found, or already deleted.
           console.warn(
             `Package with tracking ${tracking} not found for deletion or already deleted.`
           );
@@ -1230,25 +1204,21 @@ app.post("/deletepackage", async (req, res) => {
           if (commitErr) {
             console.error("Commit error in /deletepackage:", commitErr.message);
             return db.rollback(() =>
-              res
-                .status(500)
-                .json({
-                  error: "Failed to commit transaction",
-                  details: commitErr.message,
-                })
+              res.status(500).json({
+                error: "Failed to commit transaction",
+                details: commitErr.message,
+              })
             );
           }
           res.json({ message });
         });
       } catch (err) {
-        console.error("Error during /deletepackage transaction:", err.message);
+        console.error("Error during /deletepackage transaction:", err.message, err.stack);
         db.rollback(() =>
-          res
-            .status(500)
-            .json({
-              error: "Failed to delete package and associated data",
-              details: err.message,
-            })
+          res.status(500).json({
+            error: "Failed to delete package and associated data",
+            details: err.message,
+          })
         );
       }
     });
@@ -1265,7 +1235,6 @@ app.post("/deletepackage", async (req, res) => {
 });
 
 // SubBox -------------------------------------------------------------------------------------------------------------------
-// Refactored to use async/await and q helper
 app.get("/remainboxitem", async (req, res) => {
   const { box_id, emp_id } = req.query;
   if (!box_id) {
@@ -1274,14 +1243,14 @@ app.get("/remainboxitem", async (req, res) => {
   const query = `SELECT bi.*, 
             bi.quantity - COALESCE(SUM(sbi.sub_quantity), 0) AS remaining_quantity, 
             CASE 
-                WHEN bi.quantity = 0 THEN 0  -- Avoid division by zero
+                WHEN bi.quantity = 0 THEN 0 
                 ELSE bi.weight * (bi.quantity - COALESCE(SUM(sbi.sub_quantity), 0)) / bi.quantity 
             END AS adjusted_weight 
      FROM items bi 
      LEFT JOIN subbox sb ON bi.box_id = sb.box_id 
      LEFT JOIN subbox_item sbi ON sb.subbox_id = sbi.subbox_id AND bi.item_id = sbi.item_id 
      WHERE bi.box_id = ? 
-     GROUP BY bi.item_id, bi.quantity, bi.weight /* Added all non-aggregated columns from SELECT to GROUP BY */
+     GROUP BY bi.item_id, bi.tracking_number, bi.item_name, bi.item_type, bi.item_subtype, bi.quantity, bi.weight, bi.packer_id, bi.photo_url, bi.box_id, bi.item_status, bi.Date_create /* Added all non-aggregated columns */
      HAVING remaining_quantity != 0;`;
   try {
     await switchToEmployeeDB(emp_id);
@@ -1383,7 +1352,7 @@ app.get("/subboxinfo", async (req, res) => {
     if (results.length === 0) {
       return res.status(404).json({ error: "Subbox info not found." });
     }
-    res.json(results[0]); // Send single object
+    res.json(results[0]); 
   } catch (e) {
     console.error("Error in /subboxinfo:", e.msg || e.message, e.err || "");
     res
@@ -1403,7 +1372,6 @@ app.post("/addsubbox", async (req, res) => {
       .status(400)
       .json({ error: "box_id and items array are required." });
   }
-  // Add more validation for numeric fields if necessary
 
   try {
     await switchToEmployeeDB(emp_id);
@@ -1421,8 +1389,8 @@ app.post("/addsubbox", async (req, res) => {
 
     if (items.length > 0) {
       const values = items.map((item) => {
-        if (!item || item.item_id === undefined)
-          throw new Error("Invalid item structure in items array.");
+        if (!item || item.item_id === undefined || item.selectedQuantity === undefined || item.remaining_quantity === undefined ) // Added check for selectedQuantity and remaining_quantity
+          throw new Error("Invalid item structure in items array. Needs item_id, selectedQuantity, remaining_quantity.");
         const quantity = Number(item.selectedQuantity);
         const remaining = Number(item.remaining_quantity);
         return [subboxId, item.item_id, quantity === 0 ? remaining : quantity];
@@ -1479,18 +1447,16 @@ app.post("/editsubbox_track", async (req, res) => {
     subbox_tracking,
     subbox_cost,
     emp_id,
-  } = req.body; // Renamed subbox_id to subboxIds for clarity
+  } = req.body; 
 
   if (
     !Array.isArray(subboxIds) ||
     !Array.isArray(subbox_tracking) ||
     !Array.isArray(subbox_cost)
   ) {
-    return res
-      .status(400)
-      .json({
-        error: "subbox_id, subbox_tracking, and subbox_cost must be arrays.",
-      });
+    return res.status(400).json({
+      error: "subbox_id, subbox_tracking, and subbox_cost must be arrays.",
+    });
   }
   if (
     subboxIds.length !== subbox_tracking.length ||
@@ -1507,11 +1473,13 @@ app.post("/editsubbox_track", async (req, res) => {
       "UPDATE `subbox` SET `subbox_tracking` = ?, `subbox_cost` = ? WHERE `subbox_id` = ?";
 
     const updates = subboxIds.map((idObj, index) => {
-      // Assuming idObj is like { subbox_id: value } from original console.log
       const currentSubboxId =
         idObj && idObj.subbox_id !== undefined ? idObj.subbox_id : idObj;
       if (currentSubboxId === undefined || currentSubboxId === null) {
-        throw new Error(`Invalid subbox_id at index ${index}`);
+        // Throw an error that will be caught by the outer catch block
+        const err = new Error(`Invalid subbox_id at index ${index}. Value: ${JSON.stringify(idObj)}`);
+        err.status = 400; // Custom property for status code
+        throw err;
       }
       return q(query1, [
         subbox_tracking[index] || null,
@@ -1530,7 +1498,7 @@ app.post("/editsubbox_track", async (req, res) => {
     );
     res
       .status(e.status || 500)
-      .json({ error: e.msg || "Failed to update subbox tracking info." });
+      .json({ error: e.msg || e.message || "Failed to update subbox tracking info." });
   }
 });
 
@@ -1556,6 +1524,15 @@ app.post("/deletesubbox", async (req, res) => {
           .json({ error: "Transaction error", details: txErr.message });
       }
       try {
+        // Fetch subbox details to get img_url for S3 deletion
+        const [subboxDetails] = await q("SELECT img_url FROM subbox WHERE subbox_id = ?", [subbox_id]);
+        if (subboxDetails && subboxDetails.img_url) {
+            const s3Key = extractS3KeyFromUrl(subboxDetails.img_url);
+            if (s3Key) {
+                await deleteS3Object(s3Key);
+            }
+        }
+
         await q("DELETE FROM subbox_item WHERE `subbox_id` = ?;", [subbox_id]);
         const subboxDeleteResult = await q(
           "DELETE FROM subbox WHERE `subbox_id` = ?;",
@@ -1579,11 +1556,11 @@ app.post("/deletesubbox", async (req, res) => {
           }
           res.json({
             success: true,
-            message: "Subbox and associated items deleted successfully",
+            message: "Subbox, associated items, and S3 image (if exists) deleted successfully",
           });
         });
       } catch (err) {
-        console.error("Error during /deletesubbox transaction:", err.message);
+        console.error("Error during /deletesubbox transaction:", err.message, err.stack);
         db.rollback(() =>
           res
             .status(500)
@@ -1620,19 +1597,20 @@ app.post("/addsubboxitem", async (req, res) => {
       if (
         !item ||
         item.item_id === undefined ||
-        item.quantity === undefined ||
+        item.quantity === undefined || // Assuming 'quantity' refers to 'selectedQuantity' in prior logic
         item.remaining_quantity === undefined
       ) {
         throw new Error(
-          "Invalid item structure in items array. Each item needs item_id, quantity, and remaining_quantity."
+          "Invalid item structure in items array. Each item needs item_id, quantity (selected), and remaining_quantity."
         );
       }
-      const quantity = Number(item.quantity);
+      const quantity = Number(item.quantity); // Use 'quantity' as passed in the 'items' array for this route
       const remaining = Number(item.remaining_quantity);
+      // The logic for using remaining_quantity if quantity is 0 might depend on the frontend's intent here.
+      // If item.quantity is meant to be the amount *to add*, this is correct.
       return [subbox_id, item.item_id, quantity === 0 ? remaining : quantity];
     });
 
-    // ON DUPLICATE KEY UPDATE is MySQL specific.
     const query =
       "INSERT INTO subbox_item (subbox_id, item_id, sub_quantity) VALUES ? ON DUPLICATE KEY UPDATE sub_quantity = sub_quantity + VALUES(sub_quantity);";
     await q(query, [values]);
@@ -1645,10 +1623,8 @@ app.post("/addsubboxitem", async (req, res) => {
   }
 });
 
-// Box -------------------------------------------------------------------------------------------------------------------
-// These routes are more complex and involve multiple queries or specific logic.
-// They have been refactored to use async/await and include more robust error handling and input validation.
 
+// Box -------------------------------------------------------------------------------------------------------------------
 app.get("/box", async (req, res) => {
   const { box_id, emp_id } = req.query;
   if (!box_id) {
@@ -1660,7 +1636,7 @@ app.get("/box", async (req, res) => {
     if (results.length === 0) {
       return res.status(404).json({ error: "Box not found." });
     }
-    res.json(results[0]); // Send single object
+    res.json(results[0]); 
   } catch (e) {
     console.error("Error in /box:", e.msg || e.message, e.err || "");
     res
@@ -1676,15 +1652,13 @@ app.post("/addbox", async (req, res) => {
       .json({ error: "Request body with submissionData is missing." });
   }
   const { sender, recipients, note, packages } = req.body.submissionData;
-  const { emp_id } = req.body; // emp_id for DB switch
+  const { emp_id } = req.body; 
 
   if (!sender || !recipients || !Array.isArray(packages)) {
-    return res
-      .status(400)
-      .json({
-        error:
-          "Missing required fields in submissionData: sender, recipients, or packages array.",
-      });
+    return res.status(400).json({
+      error:
+        "Missing required fields in submissionData: sender, recipients, or packages array.",
+    });
   }
 
   const now = new Date();
@@ -1694,7 +1668,7 @@ app.post("/addbox", async (req, res) => {
   )}-${String(now.getDate()).padStart(2, "0")}`;
   const time = `${String(now.getHours()).padStart(2, "0")}${String(
     now.getMinutes()
-  ).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}`; // HHMMSS for uniqueness
+  ).padStart(2, "0")}${String(now.getSeconds()).padStart(2, "0")}`; 
   const box_id = `${sender}_${date}T${time}`;
 
   try {
@@ -1728,8 +1702,8 @@ app.post("/addbox", async (req, res) => {
           }
         });
         await Promise.all(itemUpdatePromises);
-        await q(
-          "UPDATE `customers` SET `packages` = `packages` + 1 WHERE `customer_id` = ?",
+        await q( // This status update might need more nuance based on other statuses
+          "UPDATE `customers` SET `packages` = `packages` + 1, `status` = 'Ordered' WHERE `customer_id` = ?",
           [sender]
         );
 
@@ -1748,7 +1722,7 @@ app.post("/addbox", async (req, res) => {
           });
         });
       } catch (err) {
-        console.error("Error during /addbox transaction:", err.message);
+        console.error("Error during /addbox transaction:", err.message, err.stack);
         db.rollback(() =>
           res
             .status(500)
@@ -1777,7 +1751,6 @@ app.post("/deletebox", async (req, res) => {
     return res.status(400).json({ error: "box_id is required." });
   }
   if (!customer_id) {
-    // customer_id needed for status update logic
     return res
       .status(400)
       .json({ error: "customer_id is required for status update logic." });
@@ -1797,6 +1770,15 @@ app.post("/deletebox", async (req, res) => {
           "UPDATE items SET item_status = 0, box_id = NULL WHERE box_id = ?;",
           [box_id]
         );
+        // Delete S3 images for subboxes within this box
+        const subboxesInBox = await q("SELECT subbox_id, img_url FROM subbox WHERE box_id = ?", [box_id]);
+        for (const subbox of subboxesInBox) {
+            if (subbox.img_url) {
+                const s3Key = extractS3KeyFromUrl(subbox.img_url);
+                if (s3Key) await deleteS3Object(s3Key);
+            }
+        }
+
         await q(
           "DELETE FROM subbox_item WHERE subbox_id IN (SELECT subbox_id FROM subbox WHERE box_id = ?)",
           [box_id]
@@ -1807,12 +1789,11 @@ app.post("/deletebox", async (req, res) => {
         ]);
 
         if (boxDeleteResult.affectedRows > 0) {
-          // Only update customer if box was actually deleted
           const updateCustomerStatusSQL = `
                 UPDATE customers 
-                SET packages = GREATEST(0, packages - 1), /* Ensure packages don't go negative */
+                SET packages = GREATEST(0, packages - 1), 
                     status = CASE 
-                                WHEN EXISTS (SELECT 1 FROM box WHERE customer_id = ? AND box_status = 'Packed') THEN 'Unpaid' /* If other boxes are packed */
+                                WHEN EXISTS (SELECT 1 FROM box WHERE customer_id = ? AND box_status = 'Packed') THEN 'Unpaid' 
                                 WHEN EXISTS (SELECT 1 FROM items i JOIN packages p ON i.tracking_number = p.tracking_number WHERE p.customer_id = ? AND i.item_status = 0) THEN 'Warehouse'
                                 ELSE NULL
                              END 
@@ -1843,7 +1824,7 @@ app.post("/deletebox", async (req, res) => {
           });
         });
       } catch (err) {
-        console.error("Error during /deletebox transaction:", err.message);
+        console.error("Error during /deletebox transaction:", err.message, err.stack);
         db.rollback(() =>
           res
             .status(500)
@@ -1871,7 +1852,7 @@ app.get("/boxitem", async (req, res) => {
   try {
     await switchToEmployeeDB(emp_id);
     const results = await q("SELECT * FROM items WHERE box_id = ?;", [box_id]);
-    res.json(results); // OK to return empty array if no items
+    res.json(results); 
   } catch (e) {
     console.error("Error in /boxitem:", e.msg || e.message, e.err || "");
     res
@@ -1888,7 +1869,7 @@ app.get("/boxslip", async (req, res) => {
   try {
     await switchToEmployeeDB(emp_id);
     const results = await q("SELECT * FROM slip WHERE box_id = ?;", [box_id]);
-    res.json(results); // OK to return empty array
+    res.json(results); 
   } catch (e) {
     console.error("Error in /boxslip:", e.msg || e.message, e.err || "");
     res
@@ -1914,7 +1895,7 @@ app.get("/subbox", async (req, res) => {
     }
 
     const subboxIds = subboxes.map((sub) => sub.subbox_id);
-    const querySubboxItem = `SELECT sbi.*, i.item_name, i.item_type, i.photo_url,
+    const querySubboxItem = `SELECT sbi.*, i.item_name, i.item_type, i.photo_url, i.item_subtype, /* Added item_subtype */
               CASE 
                   WHEN i.quantity = 0 THEN 0 
                   ELSE i.weight * sbi.sub_quantity / i.quantity 
@@ -1966,7 +1947,7 @@ app.get("/subbox_box", async (req, res) => {
 app.post("/createslip", async (req, res) => {
   if (!req.body)
     return res.status(400).json({ error: "Request body is missing" });
-  const { slip: slip_img, amount, details, BoxId: box_id, emp_id } = req.body; // Renamed for clarity
+  const { slip: slip_img, amount, details, BoxId: box_id, emp_id } = req.body; 
 
   if (!box_id || slip_img === undefined || amount === undefined) {
     return res
@@ -1994,20 +1975,29 @@ app.post("/createslip", async (req, res) => {
 app.post("/deleteslip", async (req, res) => {
   if (!req.body)
     return res.status(400).json({ error: "Request body is missing" });
-  const { slip: slip_id, emp_id } = req.body; // Assuming 'slip' from body is slip_id
+  const { slip: slip_id, emp_id } = req.body; 
 
   if (!slip_id) {
     return res.status(400).json({ error: "slip_id is required." });
   }
   try {
     await switchToEmployeeDB(emp_id);
+    // Fetch slip details to get slip_img for S3 deletion
+    const [slipDetails] = await q("SELECT slip_img FROM slip WHERE slip_id = ?", [slip_id]);
+    if (slipDetails && slipDetails.slip_img) {
+        const s3Key = extractS3KeyFromUrl(slipDetails.slip_img);
+        if (s3Key) {
+            await deleteS3Object(s3Key);
+        }
+    }
+
     const result = await q("DELETE FROM slip WHERE `slip_id` = ?;", [slip_id]);
     if (result.affectedRows === 0) {
       return res
         .status(404)
         .json({ error: "Slip not found or already deleted." });
     }
-    res.json({ message: "Slip deleted successfully." });
+    res.json({ message: "Slip and S3 image (if exists) deleted successfully." });
   } catch (e) {
     console.error("Error in /deleteslip:", e.msg || e.message, e.err || "");
     res
@@ -2016,16 +2006,16 @@ app.post("/deleteslip", async (req, res) => {
   }
 });
 
+
 // packages & completed-------------------------------------------------------------------------------------------------------------------
 app.get("/box1", async (req, res) => {
-  // For "Ordered", "Process", "Packed"
   const { emp_id } = req.query;
   try {
     await switchToEmployeeDB(emp_id);
     const [orderedResults, processResults, packedResults] = await Promise.all([
       q(
         "SELECT * FROM box WHERE box_status = 'Ordered' ORDER BY `priority` ASC, `box_id` DESC;"
-      ), // Added secondary sort
+      ), 
       q(
         "SELECT * FROM box WHERE box_status = 'Process' ORDER BY `priority` ASC, `box_id` DESC;"
       ),
@@ -2047,7 +2037,6 @@ app.get("/box1", async (req, res) => {
 });
 
 app.get("/box2", async (req, res) => {
-  // For "Paid", "Documented"
   const { emp_id } = req.query;
   try {
     await switchToEmployeeDB(emp_id);
@@ -2079,7 +2068,7 @@ app.post("/editbox", async (req, res) => {
     box_status,
     bprice,
     customer_id,
-    document,
+    document, // This is expected to be a URL from S3 or local upload
     discount,
     emp_id,
   } = req.body;
@@ -2090,17 +2079,22 @@ app.post("/editbox", async (req, res) => {
     await switchToEmployeeDB(emp_id);
     let mainQuerySql, mainQueryParams;
     let customerStatusUpdateNeeded = false;
-    let newCustomerStatus = null; // 'Unpaid', 'Warehouse', or NULL
+    let newCustomerStatus = null; 
+
+    // Fetch current box document URL if we are updating it
+    let oldDocumentUrl = null;
+    if (document !== undefined) { // If a new document URL is provided or it's being cleared
+        const [currentBox] = await q("SELECT document FROM box WHERE box_id = ?", [box_id]);
+        if (currentBox && currentBox.document) {
+            oldDocumentUrl = currentBox.document;
+        }
+    }
 
     if (bprice !== undefined) {
-      // Case: Updating status, price, document (typically moving to Packed)
       if (!box_status || !customer_id)
-        return res
-          .status(400)
-          .json({
-            error:
-              "box_status and customer_id are required when bprice is set.",
-          });
+        return res.status(400).json({
+          error: "box_status and customer_id are required when bprice is set.",
+        });
       mainQuerySql =
         "UPDATE `box` SET `box_status` = ?, `bprice` = ?, `document` = ? WHERE `box_id` = ?;";
       mainQueryParams = [
@@ -2113,37 +2107,44 @@ app.post("/editbox", async (req, res) => {
         customerStatusUpdateNeeded = true;
         newCustomerStatus = "Unpaid";
       } else {
-        // If not "Packed" but bprice is set (unusual), revert to Warehouse/NULL logic
         customerStatusUpdateNeeded = true;
-        // newCustomerStatus will be determined by item check below
       }
     } else if (discount !== undefined) {
-      // Case: Updating discount only
       mainQuerySql = "UPDATE `box` SET `discount` = ? WHERE `box_id` = ?;";
       mainQueryParams = [Number(discount) || 0, box_id];
     } else if (box_status !== undefined && customer_id !== undefined) {
-      // Case: Updating status with customer_id (typically Paid -> Warehouse/NULL or revert from Packed)
       mainQuerySql = "UPDATE `box` SET `box_status` = ? WHERE `box_id` = ?;";
       mainQueryParams = [box_status, box_id];
       customerStatusUpdateNeeded = true;
       if (box_status === "Paid") {
-        // newCustomerStatus will be determined by item check below
+        // Stays 'Paid' or logic below determines Warehouse/NULL
       } else {
-        // e.g. moving from Packed back to Process, customer should become Unpaid if other Packed boxes exist
-        // This logic is complex, current implementation sets to Unpaid
-        newCustomerStatus = "Unpaid"; // Simplified assumption, may need refinement
+        newCustomerStatus = "Unpaid"; 
       }
     } else if (box_status !== undefined) {
-      // Case: Updating status only (no customer context)
       mainQuerySql = "UPDATE `box` SET `box_status` = ? WHERE `box_id` = ?;";
       mainQueryParams = [box_status, box_id];
-    } else {
+    } else if (document !== undefined) { // Added case for updating only document
+        mainQuerySql = "UPDATE `box` SET `document` = ? WHERE `box_id` = ?;";
+        mainQueryParams = [document || null, box_id];
+    }
+    else {
       return res
         .status(400)
         .json({ error: "No valid parameters provided for editbox." });
     }
 
     await q(mainQuerySql, mainQueryParams);
+
+    // If document was updated and old document existed, delete old S3 object
+    if (document !== undefined && oldDocumentUrl && oldDocumentUrl !== document) {
+        const s3Key = extractS3KeyFromUrl(oldDocumentUrl);
+        if (s3Key) {
+            await deleteS3Object(s3Key);
+            console.log(`Old S3 document ${s3Key} deleted for box ${box_id}`);
+        }
+    }
+
 
     if (customerStatusUpdateNeeded && customer_id) {
       if (newCustomerStatus === "Unpaid") {
@@ -2152,17 +2153,29 @@ app.post("/editbox", async (req, res) => {
           [customer_id]
         );
       } else {
-        // Determine Warehouse or NULL status
-        const [{ count }] = await q(
+        // This logic determines 'Warehouse' or NULL if not explicitly 'Unpaid'
+        const [{ count: unpaidItemCount }] = await q(
           `SELECT COUNT(*) AS count FROM items i 
                      JOIN packages p ON i.tracking_number = p.tracking_number 
-                     WHERE p.customer_id = ? AND i.item_status = 0`,
+                     WHERE p.customer_id = ? AND i.item_status = 0`, // Unpacked items
           [customer_id]
         );
-        const finalStatus = count > 0 ? "Warehouse" : null;
+        const [{ count: packedBoxCount }] = await q(
+            `SELECT COUNT(*) as count FROM box WHERE customer_id = ? AND box_status = 'Packed'`, // Packed but unpaid boxes
+            [customer_id]
+        );
+
+        let finalStatus = null;
+        if (packedBoxCount > 0) {
+            finalStatus = 'Unpaid';
+        } else if (unpaidItemCount > 0) {
+            finalStatus = 'Warehouse';
+        }
+        // Only update if the status is changing, or if it's not already 'Unpaid' (which has precedence)
         await q(
-          "UPDATE customers SET status = ? WHERE customer_id = ? AND status != 'Unpaid'",
-          [finalStatus, customer_id]
+          "UPDATE customers SET status = ? WHERE customer_id = ? AND (status IS NULL OR status != 'Unpaid' OR ? IS NOT NULL)", 
+          // The last part of AND ensures if finalStatus is 'Unpaid', it overwrites. If finalStatus is NULL or Warehouse, it only overwrites non-'Unpaid'.
+          [finalStatus, customer_id, finalStatus] 
         );
       }
     }
@@ -2170,10 +2183,11 @@ app.post("/editbox", async (req, res) => {
       message: "Box edited and customer status updated successfully.",
     });
   } catch (e) {
-    console.error("Error in /editbox:", e.msg || e.message, e.err || "");
+    console.error("Error in /editbox:", e.msg || e.message, e.err || "", e.stack);
     res.status(e.status || 500).json({ error: e.msg || "Failed to edit box." });
   }
 });
+
 
 app.post("/editpriority", async (req, res) => {
   if (!req.body)
@@ -2201,8 +2215,6 @@ app.post("/editpriority", async (req, res) => {
 // appointment-------------------------------------------------------------------------------------------------------------------
 app.get("/appointment", async (req, res) => {
   const { emp_id } = req.query;
-  // status = 'Pending' AND start_date > CURDATE() - INTERVAL 1 DAY
-  // This query selects appointments that are pending and whose start_date is today or in the future.
   const query =
     "SELECT *, DATE_FORMAT(start_date, '%Y-%m-%d') AS formatted_start_date, TIME_FORMAT(start_date, '%H:%i') AS formatted_start_time FROM appointment WHERE status = 'Pending' AND start_date >= CURDATE() ORDER BY start_date ASC;";
   try {
@@ -2221,7 +2233,7 @@ app.post("/addappoint", async (req, res) => {
   if (!req.body)
     return res.status(400).json({ error: "Request body is missing" });
   const {
-    title,
+    title, // This is customer_id
     address_pickup,
     phone_pickup,
     name_pickup,
@@ -2230,27 +2242,24 @@ app.post("/addappoint", async (req, res) => {
     note,
     pickupdate,
     pickupTime,
-    emp_id, // pickupTime should be HH:MM
+    emp_id, 
   } = req.body;
 
   if (!title || !pickupdate || !pickupTime) {
     return res
       .status(400)
-      .json({ error: "Title, pickupdate, and pickupTime are required." });
+      .json({ error: "Title (customer_id), pickupdate, and pickupTime are required." });
   }
 
-  const dateTimeString = `${pickupdate}T${pickupTime}:00`; // Assuming local time
+  const dateTimeString = `${pickupdate}T${pickupTime}:00`; 
   const startDateTime = new Date(dateTimeString);
   if (isNaN(startDateTime.getTime())) {
-    return res
-      .status(400)
-      .json({
-        error:
-          "Invalid pickupdate or pickupTime format. Use YYYY-MM-DD and HH:MM.",
-      });
+    return res.status(400).json({
+      error:
+        "Invalid pickupdate or pickupTime format. Use YYYY-MM-DD and HH:MM.",
+    });
   }
 
-  // MySQL expects 'YYYY-MM-DD HH:MM:SS'
   const formatForMySQL = (dateObj) => {
     const year = dateObj.getFullYear();
     const month = String(dateObj.getMonth() + 1).padStart(2, "0");
@@ -2262,7 +2271,7 @@ app.post("/addappoint", async (req, res) => {
   };
 
   const start_time_mysql = formatForMySQL(startDateTime);
-  const endDateTime = new Date(startDateTime.getTime() + 30 * 60000); // Add 30 minutes
+  const endDateTime = new Date(startDateTime.getTime() + 30 * 60000); 
   const end_time_mysql = formatForMySQL(endDateTime);
 
   const query1 =
@@ -2270,11 +2279,11 @@ app.post("/addappoint", async (req, res) => {
   try {
     await switchToEmployeeDB(emp_id);
     const result = await q(query1, [
-      title,
+      title, // title field in DB for the event title/summary
       start_time_mysql,
       end_time_mysql,
       note || null,
-      title, // Assuming title is customer_id
+      title, // customer_id field in DB
       address_pickup || null,
       phone_pickup || null,
       name_pickup || null,
@@ -2297,20 +2306,21 @@ app.post("/editappoint", async (req, res) => {
   if (!req.body)
     return res.status(400).json({ error: "Request body is missing" });
   const {
-    appoint_id: address_id, // appoint_id is expected from frontend as 'address_id'
+    appoint_id: address_id, // appoint_id from DB, frontend sends as 'address_id'
+    title, // Added title for editing
     address_pickup,
     phone_pickup,
     name_pickup,
     position,
     vehicle,
     note,
-    status, // Added status
+    status, 
     pickupdate,
-    pickupTime, // For editing time
+    pickupTime, 
     emp_id,
   } = req.body;
 
-  if (!address_id) {
+  if (!address_id) { // This is appoint_id
     return res
       .status(400)
       .json({ error: "appoint_id (as address_id) is required." });
@@ -2321,11 +2331,9 @@ app.post("/editappoint", async (req, res) => {
     const dateTimeString = `${pickupdate}T${pickupTime}:00`;
     const startDateTime = new Date(dateTimeString);
     if (isNaN(startDateTime.getTime())) {
-      return res
-        .status(400)
-        .json({
-          error: "Invalid pickupdate or pickupTime format for editing.",
-        });
+      return res.status(400).json({
+        error: "Invalid pickupdate or pickupTime format for editing.",
+      });
     }
     const formatForMySQL = (dateObj) =>
       `${dateObj.getFullYear()}-${String(dateObj.getMonth() + 1).padStart(
@@ -2342,9 +2350,15 @@ app.post("/editappoint", async (req, res) => {
     end_time_mysql = formatForMySQL(endDateTime);
   }
 
-  // Build query dynamically based on provided fields
   const updates = [];
   const params = [];
+
+  if (title !== undefined) { // For editing the event title/customer_id
+    updates.push("`title` = ?");
+    params.push(title);
+    updates.push("`customer_id` = ?"); // Assuming title and customer_id are the same
+    params.push(title);
+  }
   if (note !== undefined) {
     updates.push("`note` = ?");
     params.push(note);
@@ -2386,7 +2400,7 @@ app.post("/editappoint", async (req, res) => {
     return res.status(400).json({ error: "No fields provided for update." });
   }
 
-  params.push(address_id); // For WHERE clause
+  params.push(address_id); // This is appoint_id for WHERE clause
   const query1 = `UPDATE appointment SET ${updates.join(
     ", "
   )} WHERE appoint_id = ?;`;
@@ -2409,14 +2423,13 @@ app.get("/gentrack", async (req, res) => {
   if (!type) {
     return res.status(400).json({ error: "Tracking type prefix is required." });
   }
-  const typelike = type + "-%"; // Ensure '-' for parsing number part
-  // This query assumes tracking numbers are like PREFIX-NUMBER
+  const typelike = type + "-%"; 
   const query =
     "SELECT tracking_number FROM `packages` WHERE `tracking_number` LIKE ? ORDER BY CAST(SUBSTRING_INDEX(tracking_number, '-', -1) AS UNSIGNED) DESC LIMIT 1;";
   try {
     await switchToEmployeeDB(emp_id);
     const results = await q(query, [typelike]);
-    res.json(results); // Returns array, potentially empty
+    res.json(results); 
   } catch (e) {
     console.error("Error in /gentrack:", e.msg || e.message, e.err || "");
     res
@@ -2435,21 +2448,30 @@ app.post("/editsendaddr", async (req, res) => {
     address,
     city,
     state,
-    country = "Thailand", // Default value
+    country = "Thailand", 
     zipcode,
     phone,
     doc_type,
-    doc_url,
+    doc_url, // This should be an S3 URL or similar
     emp_id,
   } = req.body;
 
   if (!emp_id) return res.status(400).json({ error: "emp_id is required" });
   if (!customer_id)
     return res.status(400).json({ error: "customer_id is required" });
-  // Add more validation for other fields if they are mandatory
 
   try {
     await switchToEmployeeDB(emp_id);
+
+    // Fetch current doc_url to delete from S3 if it changes
+    let oldDocUrl = null;
+    if (doc_url !== undefined) { // If a new doc_url is provided or it's being cleared
+        const [currentCustomer] = await q("SELECT doc_url FROM customers WHERE customer_id = ?", [customer_id]);
+        if (currentCustomer && currentCustomer.doc_url) {
+            oldDocUrl = currentCustomer.doc_url;
+        }
+    }
+    
     let sql =
       "UPDATE customers SET customer_name = ?, address = ?, city = ?, state = ?, country = ?, zipcode = ?, phone = ?";
     const params = [
@@ -2464,33 +2486,47 @@ app.post("/editsendaddr", async (req, res) => {
 
     if (doc_type !== undefined && doc_url !== undefined) {
       sql += ", doc_type = ?, doc_url = ?";
-      params.push(doc_type, doc_url);
+      params.push(doc_type, doc_url || null); // Allow clearing doc_url by passing null/empty
+    } else if (doc_url !== undefined) { // If only doc_url is sent (e.g. to clear it, assuming doc_type remains or is cleared separately)
+      sql += ", doc_url = ?";
+      params.push(doc_url || null);
     }
+
     sql += " WHERE customer_id = ?";
     params.push(customer_id);
 
     await q(sql, params);
+
+    // If doc_url was updated and oldDocUrl existed and is different
+    if (doc_url !== undefined && oldDocUrl && oldDocUrl !== (doc_url || null) ) {
+        const s3Key = extractS3KeyFromUrl(oldDocUrl);
+        if (s3Key) {
+            await deleteS3Object(s3Key);
+            console.log(`Old S3 document ${s3Key} deleted for customer ${customer_id}`);
+        }
+    }
+
     return res.json({
       success: true,
-      message: "Customer address updated successfully.",
+      message: "Customer address and document (if any) updated successfully.",
     });
   } catch (e) {
-    console.error("Error in /editsendaddr:", e.msg || e.message, e.err || "");
+    console.error("Error in /editsendaddr:", e.msg || e.message, e.err || "", e.stack);
     return res
       .status(e.status || 500)
       .json({ error: e.msg || "Internal server error while updating address" });
   }
 });
 
+
 // Setting-------------------------------------------------------------------------------------------------------------------
-// Routes related to FS operations for settings need robust path handling and error checking.
-// Ensure RAILWAY_VOLUME_MOUNT_PATH is correctly set.
 
 const getCompanyFilePath = (companyName, fileName) => {
-  if (!process.env.RAILWAY_VOLUME_MOUNT_PATH) {
-    console.error("RAILWAY_VOLUME_MOUNT_PATH is not set.");
-    throw new Error("Server configuration error: Volume mount path missing.");
-  }
+  // This check is now at the top of the file
+  // if (!process.env.RAILWAY_VOLUME_MOUNT_PATH) {
+  //   console.error("RAILWAY_VOLUME_MOUNT_PATH is not set.");
+  //   throw new Error("Server configuration error: Volume mount path missing.");
+  // }
   if (
     !companyName ||
     typeof companyName !== "string" ||
@@ -2499,7 +2535,7 @@ const getCompanyFilePath = (companyName, fileName) => {
     throw new Error("Invalid company name for file path generation.");
   }
   const dirPath = path.join(
-    process.env.RAILWAY_VOLUME_MOUNT_PATH,
+    process.env.RAILWAY_VOLUME_MOUNT_PATH, // This must be defined
     companyName.trim()
   );
   const filePath = path.join(dirPath, fileName);
@@ -2609,7 +2645,7 @@ app.get("/dropdown", (req, res) => {
 app.post("/editdropdown", (req, res) => {
   if (!req.body)
     return res.status(400).json({ error: "Request body is missing" });
-  const { channels, categories, levels, emp_id } = req.body; // Assuming newData structure
+  const { channels, categories, levels, emp_id } = req.body; 
 
   if (
     !emp_id ||
@@ -2617,26 +2653,31 @@ app.post("/editdropdown", (req, res) => {
     !Array.isArray(categories) ||
     !Array.isArray(levels)
   ) {
-    return res
-      .status(400)
-      .json({
-        error:
-          "emp_id and arrays for channels, categories, levels are required.",
-      });
+    return res.status(400).json({
+      error: "emp_id and arrays for channels, categories, levels are required.",
+    });
   }
-  // Sanitize: ensure names are strings and unique
-  const sanitizeArray = (arr) => [
-    ...new Set(
-      arr
-        .filter((item) => item && typeof item.name === "string")
-        .map((item) => item.name.trim())
-    ),
-  ];
+  // Sanitize: ensure names are strings and unique, structure is [{name: "value"}]
+  const sanitizeArrayOfObjects = (arr) => {
+    if (!Array.isArray(arr)) return [];
+    const uniqueNames = new Set();
+    return arr
+      .filter(item => item && typeof item.name === 'string' && item.name.trim() !== '')
+      .map(item => ({ name: item.name.trim() }))
+      .filter(item => {
+        if (uniqueNames.has(item.name)) {
+          return false;
+        }
+        uniqueNames.add(item.name);
+        return true;
+      });
+  };
+
 
   const processedData = {
-    channels: sanitizeArray(channels),
-    categories: sanitizeArray(categories),
-    levels: sanitizeArray(levels),
+    channels: sanitizeArrayOfObjects(channels),
+    categories: sanitizeArrayOfObjects(categories),
+    levels: sanitizeArrayOfObjects(levels),
   };
 
   companydb.query(
@@ -2672,7 +2713,6 @@ app.post("/editdropdown", (req, res) => {
   );
 });
 
-// Generic settings GET and POST handlers
 const createSettingsRoute = (settingName, defaultData = {}) => {
   app.get(`/${settingName}`, (req, res) => {
     const { emp_id } = req.query;
@@ -2712,23 +2752,32 @@ const createSettingsRoute = (settingName, defaultData = {}) => {
   });
 
   app.post(`/edit${settingName}`, (req, res) => {
-    // data for edit should be in req.body.updatedData or similar
     if (!req.body)
       return res.status(400).json({ error: "Request body is missing" });
-    const { emp_id } = req.body; // emp_id must be in the body
-    const newData =
-      req.body.updatedData ||
-      req.body.updatedPricing ||
-      req.body.updatedPromotions ||
-      req.body.formData ||
-      req.body; // Accommodate different body structures
+    const { emp_id } = req.body; 
+    let newData = req.body; // Default to full body
 
-    if (!emp_id || newData === undefined)
+    // Specific handling for different settings if structure varies
+    if (settingName === "price" && req.body.updatedPricing) {
+        newData = req.body.updatedPricing;
+    } else if (settingName === "promotion" && req.body.updatedPromotions) {
+        newData = req.body.updatedPromotions;
+    } else if (settingName === "company_info" && req.body.formData) {
+        newData = req.body.formData;
+    } else if (settingName === "warehouse") { // For 'warehouse', data might be the whole body excluding emp_id
+        const { emp_id: _, ...warehouseData } = req.body;
+        newData = warehouseData;
+    } else { // For other settings, or if specific keys aren't present, assume relevant data is top-level excluding emp_id
+        const { emp_id: _, ...restOfData } = req.body;
+        newData = restOfData;
+    }
+
+
+    if (!emp_id || newData === undefined || Object.keys(newData).length === 0) // Also check if newData is empty
       return res
         .status(400)
         .json({ error: `emp_id and data for ${settingName} are required.` });
 
-    // Simple validation: newData should be an object
     if (typeof newData !== "object" || newData === null) {
       return res
         .status(400)
@@ -2759,18 +2808,19 @@ const createSettingsRoute = (settingName, defaultData = {}) => {
             row.company_name,
             `${settingName}.json`
           );
-          let dataToSave = newData;
-          // Specific handling for /editwarehoussetting if 'emp_id' was part of data
-          if (settingName === "warehouse" && newData.emp_id) {
-            const { emp_id: _, ...restOfData } = newData; // Remove emp_id from data being saved
-            dataToSave = restOfData;
-          } else if (newData.updatedPricing)
-            dataToSave = newData.updatedPricing; // for /editprice
-          else if (newData.updatedPromotions)
-            dataToSave = newData.updatedPromotions; // for /editpromotion
-          else if (newData.formData) dataToSave = newData.formData; // for /editcompany_info
-
-          writeJsonFile(filePath, dirPath, dataToSave);
+          
+          // If logoUrl is part of company_info and it changed, delete old S3 logo
+          if (settingName === "company_info" && newData.logoUrl !== undefined) {
+            const currentData = readOrCreateJsonFile(filePath, dirPath, defaultData);
+            if (currentData.logoUrl && currentData.logoUrl !== newData.logoUrl) {
+              const s3Key = extractS3KeyFromUrl(currentData.logoUrl);
+              if (s3Key) {
+                deleteS3Object(s3Key).catch(s3Err => console.error("Failed to delete old S3 logo:", s3Err));
+              }
+            }
+          }
+          
+          writeJsonFile(filePath, dirPath, newData); // Save the processed newData
           res.json({
             message: `${settingName} settings updated successfully.`,
           });
@@ -2782,14 +2832,13 @@ const createSettingsRoute = (settingName, defaultData = {}) => {
   });
 };
 
-createSettingsRoute("price");
-createSettingsRoute("promotion");
-createSettingsRoute("warehouse"); // For /editwarehoussetting, data is req.body directly
-createSettingsRoute("company_info"); // For /editcompany_info, data is req.body.formData
+createSettingsRoute("price", []); // Default to empty array for price
+createSettingsRoute("promotion", []); // Default to empty array for promotion
+createSettingsRoute("warehouse", {}); // Default to empty object for warehouse
+createSettingsRoute("company_info", {}); // Default to empty object for company_info
 
-// Employee management uses companydb directly
 app.get("/employee", (req, res) => {
-  const { emp_id } = req.query; // This is the requesting employee's ID
+  const { emp_id } = req.query; 
   if (!emp_id)
     return res.status(400).json({ error: "Requesting emp_id is required." });
 
@@ -2826,12 +2875,12 @@ app.get("/employee", (req, res) => {
 });
 
 app.get("/employeeinfo", (req, res) => {
-  const { id } = req.query; // Encrypted ID of the employee whose info is requested
+  const { id } = req.query; 
   if (!id)
     return res
       .status(400)
       .json({ error: "Encrypted employee ID (id) is required." });
-  const decryptedId = decryptEmpId(id);
+  const decryptedId = decryptEmpId(id); // Middleware already decrypts req.query.emp_id, this is for path/param `id`
   if (!decryptedId)
     return res
       .status(400)
@@ -2847,7 +2896,7 @@ app.get("/employeeinfo", (req, res) => {
       }
       const row = firstRowOr404(res, results, "Employee info not found.");
       if (!row) return;
-      res.json(row); // Send single employee object
+      res.json(row); 
     }
   );
 });
@@ -2860,9 +2909,10 @@ app.post("/addemployee", (req, res) => {
     username,
     role,
     password,
-    emp_date,
-    emp_id: requesting_emp_id,
-  } = req.body; // requesting_emp_id is of admin/owner
+    emp_date, // This is the hired date
+    eimg, // This is the S3 URL for employee image
+    emp_id: requesting_emp_id, // This is the emp_id of the admin/owner making the request
+  } = req.body; 
 
   if (!emp_name || !username || !role || !password || !requesting_emp_id) {
     return res
@@ -2883,38 +2933,40 @@ app.post("/addemployee", (req, res) => {
       const row = firstRowOr404(res, results, "Requesting employee not found.");
       if (!row) return;
       if (!row.company_name || !row.emp_database || !row.emp_datapass) {
-        return res
-          .status(500)
-          .json({
-            error:
-              "Configuration error: Requesting employee's company details missing.",
-          });
+        return res.status(500).json({
+          error:
+            "Configuration error: Requesting employee's company details missing.",
+        });
       }
 
       const query1 =
-        "INSERT INTO `employee` (`username`, `emp_name`, `password`, `emp_database`, `emp_datapass`, `company_name`, `role`, `eimg`, `emp_date`) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?);";
+        "INSERT INTO `employee` (`username`, `emp_name`, `password`, `emp_database`, `emp_datapass`, `company_name`, `role`, `eimg`, `emp_date`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);";
       companydb.query(
         query1,
         [
           username,
           emp_name,
-          password, // Consider hashing password
+          password, 
           row.emp_database,
           row.emp_datapass,
           row.company_name,
           role,
+          eimg || null, // Use provided eimg (S3 URL) or null
           emp_date || new Date(),
         ],
         (err, insertResult) => {
           if (err) {
             console.error("DB error in /addemployee (step 2):", err.message);
+            if (err.code === 'ER_DUP_ENTRY') {
+                 return res.status(409).json({ error: "Username already exists." });
+            }
             return res
               .status(500)
               .json({ error: "Failed to add new employee" });
           }
           res.json({
             message: "Employee added successfully.",
-            empId: insertResult.insertId,
+            empIdGeneratedByDB: insertResult.insertId, // This is the auto-incremented emp_id if your table uses it
           });
         }
       );
@@ -2923,16 +2975,15 @@ app.post("/addemployee", (req, res) => {
 });
 
 app.post("/editemployee", (req, res) => {
-  // Can be called by admin/owner
   if (!req.body)
     return res.status(400).json({ error: "Request body is missing" });
-  const { emp_id, emp_name, password, role, username } = req.body; // emp_id is the ID of employee to be edited
+  const { emp_id, emp_name, password, role, username, eimg } = req.body; 
 
-  if (!emp_id)
+  if (!emp_id) // emp_id here is the ID of the employee being edited (already decrypted if it came encrypted)
     return res
       .status(400)
       .json({ error: "emp_id of employee to edit is required." });
-  // Build dynamic query
+  
   const updates = [];
   const params = [];
   if (username !== undefined) {
@@ -2943,36 +2994,64 @@ app.post("/editemployee", (req, res) => {
     updates.push("`emp_name` = ?");
     params.push(emp_name);
   }
-  if (password !== undefined) {
+  if (password !== undefined && password !== "") { // Only update password if provided and not empty
     updates.push("`password` = ?");
     params.push(password);
-  } // Consider hashing
+  } 
   if (role !== undefined) {
     updates.push("`role` = ?");
     params.push(role);
   }
+  if (eimg !== undefined) { // Allow updating or clearing eimg
+    updates.push("`eimg` = ?");
+    params.push(eimg || null);
+  }
+
 
   if (updates.length === 0)
     return res.status(400).json({ error: "No fields provided for update." });
 
-  params.push(emp_id);
+  params.push(emp_id); // Add emp_id for the WHERE clause
   const query = `UPDATE employee SET ${updates.join(", ")} WHERE emp_id = ?;`;
 
-  companydb.query(query, params, (err, results) => {
-    if (err) {
-      console.error("DB error in /editemployee:", err.message);
-      return res.status(500).json({ error: "Failed to update employee" });
+  // Fetch old eimg for S3 deletion if it's being changed
+  companydb.query("SELECT eimg FROM employee WHERE emp_id = ?", [emp_id], (fetchErr, oldEmployee) => {
+    if (fetchErr) {
+        console.error("DB error fetching old employee eimg:", fetchErr.message);
+        return res.status(500).json({ error: "Failed to prepare employee update." });
     }
-    if (results.affectedRows === 0)
-      return res
-        .status(404)
-        .json({ error: "Employee not found or no changes made." });
-    res.json({ message: "Employee updated successfully." });
+    if (!oldEmployee || oldEmployee.length === 0) {
+        return res.status(404).json({ error: "Employee to edit not found." });
+    }
+    const oldEimgUrl = oldEmployee[0].eimg;
+
+    companydb.query(query, params, (err, results) => {
+        if (err) {
+          console.error("DB error in /editemployee:", err.message);
+            if (err.code === 'ER_DUP_ENTRY' && err.message.includes('username')) {
+                return res.status(409).json({ error: "Username already exists." });
+            }
+          return res.status(500).json({ error: "Failed to update employee" });
+        }
+        if (results.affectedRows === 0)
+          return res
+            .status(404) // Or 304 if no changes were made but employee exists
+            .json({ error: "Employee not found or no changes made." });
+
+        // If eimg was updated and old eimg existed and is different
+        if (eimg !== undefined && oldEimgUrl && oldEimgUrl !== (eimg || null)) {
+            const s3Key = extractS3KeyFromUrl(oldEimgUrl);
+            if (s3Key) {
+                deleteS3Object(s3Key).catch(s3Err => console.error("Failed to delete old S3 employee image:", s3Err));
+            }
+        }
+        res.json({ message: "Employee updated successfully." });
+      });
   });
 });
 
+
 app.post("/deleteemployee", (req, res) => {
-  // Can be called by admin/owner
   if (!req.body)
     return res.status(400).json({ error: "Request body is missing" });
   const { emp_id } = req.body; // emp_id of employee to be deleted
@@ -2982,71 +3061,102 @@ app.post("/deleteemployee", (req, res) => {
       .status(400)
       .json({ error: "emp_id of employee to delete is required." });
 
-  // Prevent owner from being deleted
-  const query1 =
-    "DELETE FROM `employee` WHERE `emp_id` = ? AND `role` != 'owner';";
-  companydb.query(query1, [emp_id], (err, results) => {
-    if (err) {
-      console.error("DB error in /deleteemployee:", err.message);
-      return res.status(500).json({ error: "Failed to delete employee" });
+  // Fetch employee details to get eimg for S3 deletion
+  companydb.query("SELECT eimg, role FROM employee WHERE emp_id = ?", [emp_id], (fetchErr, results) => {
+    if (fetchErr) {
+        console.error("DB error fetching employee for deletion:", fetchErr.message);
+        return res.status(500).json({ error: "Failed to fetch employee details for deletion." });
     }
-    if (results.affectedRows === 0) {
-      return res
-        .status(404)
-        .json({
-          error:
-            "Employee not found, or tried to delete owner, or already deleted.",
+    if (!results || results.length === 0) {
+        return res.status(404).json({ error: "Employee not found." });
+    }
+    const employeeToDelete = results[0];
+
+    if (employeeToDelete.role === 'owner') {
+        return res.status(403).json({ error: "Owner role cannot be deleted." });
+    }
+
+    const queryDelete = "DELETE FROM `employee` WHERE `emp_id` = ?;";
+    companydb.query(queryDelete, [emp_id], (deleteErr, deleteResults) => {
+      if (deleteErr) {
+        console.error("DB error in /deleteemployee:", deleteErr.message);
+        return res.status(500).json({ error: "Failed to delete employee" });
+      }
+      if (deleteResults.affectedRows === 0) {
+        // This case should ideally be caught by the fetch above, but as a safeguard:
+        return res.status(404).json({
+          error: "Employee not found or already deleted.",
         });
-    }
-    res.json({ message: "Employee deleted successfully." });
+      }
+
+      // If employee had an image, delete it from S3
+      if (employeeToDelete.eimg) {
+        const s3Key = extractS3KeyFromUrl(employeeToDelete.eimg);
+        if (s3Key) {
+          deleteS3Object(s3Key).catch(s3Err => console.error("Failed to delete S3 employee image:", s3Err));
+        }
+      }
+      res.json({ message: "Employee and associated S3 image (if any) deleted successfully." });
+    });
   });
 });
 
+
 //-------------------------------------------Local Management (Multer for local disk)------------------------------------------
-// These routes are for local file storage, which might not be ideal for Railway (ephemeral storage).
-// S3 uploads are generally preferred for cloud environments.
-// Ensure RAILWAY_VOLUME_MOUNT_PATH is a persistent volume if local storage is truly needed.
+// THESE ARE PROBLEMATIC ON RAILWAY'S EPHEMERAL FILESYSTEM IF PERSISTENCE IS NEEDED.
+// Strongly recommend using S3 for all uploads.
+// If you *must* use local storage, ensure a Volume is attached in Railway.
 
 const getLocalUploadPath = (subfolder) => {
   if (!process.env.RAILWAY_VOLUME_MOUNT_PATH) {
-    console.error("RAILWAY_VOLUME_MOUNT_PATH is not set for local uploads.");
-    return null; // Or throw error
+    console.error(
+      "RAILWAY_VOLUME_MOUNT_PATH is not set. Local uploads will fail or be lost."
+    );
+    // Depending on how critical local uploads are, you might throw an error here or return null
+    // and let the calling function handle it. For now, returning null.
+    return null;
   }
   const baseUploadDir = path.join(
     process.env.RAILWAY_VOLUME_MOUNT_PATH,
     "uploads"
   );
   const targetDir = path.join(baseUploadDir, subfolder);
-  if (!fs.existsSync(targetDir)) {
-    try {
+  try {
+    if (!fs.existsSync(targetDir)) {
       fs.mkdirSync(targetDir, { recursive: true });
-    } catch (e) {
-      console.error(`Failed to create directory ${targetDir}:`, e.message);
-      return null;
     }
+    return targetDir;
+  } catch (e) {
+    console.error(`Failed to create directory ${targetDir}:`, e.message);
+    return null; // Failed to create/ensure directory
   }
-  return targetDir;
 };
 
 const imageStorage = multer.diskStorage({
   destination: (req, file, cb) => {
     const uploadDir = getLocalUploadPath("img");
-    if (!uploadDir)
-      return cb(new Error("Failed to get image upload directory."));
+    if (!uploadDir) {
+      // If getLocalUploadPath returns null, it means RAILWAY_VOLUME_MOUNT_PATH is not set
+      // or directory creation failed.
+      return cb(
+        new Error(
+          "Image upload directory is not configured or accessible. Check RAILWAY_VOLUME_MOUNT_PATH."
+        )
+      );
+    }
     cb(null, uploadDir);
   },
   filename: (req, file, cb) => {
-    // Sanitize filename to prevent path traversal or invalid characters
     const safeOriginalName = path
       .basename(file.originalname)
       .replace(/[^a-zA-Z0-9._-]/g, "_");
     const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, уникальныйСуффикс + "-" + safeOriginalName); // uniqueSuffix-originalName
+    cb(null, uniqueSuffix + "-" + safeOriginalName); // CORRECTED TYPO
   },
 });
 const uploadImage = multer({
   storage: imageStorage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+  limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith("image/")) {
       cb(null, true);
@@ -3058,45 +3168,47 @@ const uploadImage = multer({
 
 app.post("/uploadLogo", uploadImage.single("logo"), (req, res) => {
   if (!req.file) {
-    return res
-      .status(400)
-      .json({
-        success: false,
-        message: "No file uploaded or invalid file type.",
-      });
+    return res.status(400).json({
+      success: false,
+      message: "No file uploaded or invalid file type.",
+    });
   }
-  // filePath will be just the filename, not the full server path for security.
-  // Client reconstructs URL using base path + filename if needed for display.
+  // Return a relative path or just filename if served via express.static
+  // For Railway, S3 is preferred. This local file might not be accessible publicly.
   res.status(200).json({
     success: true,
-    message: "Logo uploaded successfully",
-    fileName: req.file.filename, // Send filename back
+    message: "Logo uploaded successfully (locally)",
+    fileName: req.file.filename,
+    // To make it accessible if served via express.static:
+    // localUrl: `/uploads/img/${req.file.filename}`
   });
 });
 
 app.post("/uploadSlip", uploadImage.single("slip"), (req, res) => {
   if (!req.file) {
-    return res
-      .status(400)
-      .json({
-        success: false,
-        message: "No slip file uploaded or invalid file type.",
-      });
-  }
-  res
-    .status(200)
-    .json({
-      success: true,
-      message: "Slip uploaded successfully",
-      fileName: req.file.filename,
+    return res.status(400).json({
+      success: false,
+      message: "No slip file uploaded or invalid file type.",
     });
+  }
+  res.status(200).json({
+    success: true,
+    message: "Slip uploaded successfully (locally)",
+    fileName: req.file.filename,
+    // localUrl: `/uploads/img/${req.file.filename}`
+  });
 });
 
 const documentStorage = multer.diskStorage({
   destination: (req, file, cb) => {
     const uploadDir = getLocalUploadPath("doc");
-    if (!uploadDir)
-      return cb(new Error("Failed to get document upload directory."));
+    if (!uploadDir) {
+      return cb(
+        new Error(
+          "Document upload directory is not configured or accessible. Check RAILWAY_VOLUME_MOUNT_PATH."
+        )
+      );
+    }
     cb(null, uploadDir);
   },
   filename: (req, file, cb) => {
@@ -3104,13 +3216,12 @@ const documentStorage = multer.diskStorage({
       .basename(file.originalname)
       .replace(/[^a-zA-Z0-9._-]/g, "_");
     const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    cb(null, уникальныйСуффикс + "-" + safeOriginalName);
+    cb(null, uniqueSuffix + "-" + safeOriginalName); // CORRECTED TYPO
   },
 });
 const uploadDocument = multer({
   storage: documentStorage,
-  limits: { fileSize: 20 * 1024 * 1024 }, // 20MB limit for documents
-  // Add fileFilter for documents if needed (e.g., PDF, DOCX)
+  limits: { fileSize: 20 * 1024 * 1024 },
 });
 
 app.post("/uploadDocument", uploadDocument.single("document"), (req, res) => {
@@ -3119,20 +3230,36 @@ app.post("/uploadDocument", uploadDocument.single("document"), (req, res) => {
       .status(400)
       .json({ success: false, message: "No document file uploaded." });
   }
-  // For local files, client would typically not get the full server path.
-  // If these files need to be served, use express.static and provide relative paths/filenames.
   res.status(200).json({
     success: true,
-    message: "Document uploaded successfully",
-    fileName: req.file.filename, // Send just the filename
+    message: "Document uploaded successfully (locally)",
+    fileName: req.file.filename,
+    // localUrl: `/uploads/doc/${req.file.filename}`
   });
 });
 
-// Static serving for locally uploaded images/docs IF NEEDED (consider S3 for production)
-const localUploadsDir = getLocalUploadPath(""); // Gets base 'uploads' dir
-if (localUploadsDir) {
-  app.use("/uploads", express.static(localUploadsDir));
-  console.log(`Serving local uploads from ${localUploadsDir} at /uploads`);
+// Static serving for locally uploaded images/docs
+// This will only work if RAILWAY_VOLUME_MOUNT_PATH is set and a volume is attached.
+if (process.env.RAILWAY_VOLUME_MOUNT_PATH) {
+  const localUploadsBaseDir = path.join(
+    process.env.RAILWAY_VOLUME_MOUNT_PATH,
+    "uploads"
+  );
+  if (!fs.existsSync(localUploadsBaseDir)) {
+    try {
+      fs.mkdirSync(localUploadsBaseDir, { recursive: true });
+    } catch (e) {
+      console.warn(`Could not create base local uploads directory ${localUploadsBaseDir}: ${e.message}. Static serving might fail.`);
+    }
+  }
+  app.use("/uploads", express.static(localUploadsBaseDir));
+  console.log(
+    `Serving local uploads from ${localUploadsBaseDir} at /uploads (if volume is attached and path is valid)`
+  );
+} else {
+  console.warn(
+    "RAILWAY_VOLUME_MOUNT_PATH not set. Static serving for local uploads is disabled."
+  );
 }
 
 //--------------------------------------------------- S3 IMAGE UPLOAD (Preferred for Cloud) ---------------------------------------------------
@@ -3144,17 +3271,16 @@ const createS3UploadHandler = (fieldName, s3SubFolder) => {
         .status(400)
         .json({ error: `No file uploaded (field '${fieldName}')` });
     }
-    const { originalname, buffer } = req.file;
+    const { originalname, buffer, mimetype } = req.file; // Added mimetype
 
-    // emp_id is already decrypted by middleware
-    const empId = req.query.emp_id || (req.body && req.body.emp_id); // Prefer decrypted one
+    const empId = req.query.emp_id || (req.body && req.body.emp_id);
     if (!empId) {
       return res
         .status(400)
         .json({ error: "Invalid or missing emp_id (decrypted)" });
     }
-    if (!process.env.AWS_BUCKET) {
-      console.error("AWS_BUCKET environment variable is not set.");
+    if (!process.env.AWS_BUCKET || !process.env.AWS_REGION) { // Also check AWS_REGION
+      console.error("AWS_BUCKET or AWS_REGION environment variable is not set.");
       return res
         .status(500)
         .json({ error: "Server configuration error for S3 upload." });
@@ -3162,7 +3288,6 @@ const createS3UploadHandler = (fieldName, s3SubFolder) => {
 
     try {
       const rows = await new Promise((resolve, reject) => {
-        // Using companydb for employee lookup
         companydb.query(
           "SELECT emp_database FROM employee WHERE emp_id = ?",
           [empId],
@@ -3176,57 +3301,77 @@ const createS3UploadHandler = (fieldName, s3SubFolder) => {
       }
       const companyFolder = rows[0].emp_database;
       if (!companyFolder) {
-        return res
-          .status(500)
-          .json({
-            error: `Configuration error: emp_database not found for employee ${empId}`,
-          });
+        return res.status(500).json({
+          error: `Configuration error: emp_database not found for employee ${empId}`,
+        });
+      }
+      
+      let processedBuffer = buffer;
+      let contentType = mimetype;
+      let fileExtension = path.extname(originalname).toLowerCase();
+
+      // Convert to WebP only if it's an image type that Sharp supports for outputting WebP
+      // And not already a WebP
+      if (mimetype.startsWith('image/') && mimetype !== 'image/webp' && mimetype !== 'image/gif' /*Sharp might have issues with animated gif to webp*/) {
+          try {
+            processedBuffer = await sharp(buffer).webp({ quality: 80 }).toBuffer();
+            contentType = "image/webp";
+            fileExtension = ".webp";
+          } catch (sharpError) {
+            console.warn(`Sharp conversion to WebP failed for ${originalname}, uploading as original: ${sharpError.message}`);
+            // Fallback to original buffer and contentType if sharp fails
+            processedBuffer = buffer;
+            contentType = mimetype; // Keep original
+          }
       }
 
-      const webpBuffer = await sharp(buffer).webp({ quality: 80 }).toBuffer();
 
       let key;
       const baseName = path
         .basename(originalname, path.extname(originalname))
-        .replace(/[^a-zA-Z0-9_-]/g, "_"); // Sanitize basename
+        .replace(/[^a-zA-Z0-9_-]/g, "_");
       const timestamp = Date.now();
 
+      // Use clientFileName if provided and sanitized, otherwise use originalname
+      let desiredBaseName = baseName;
       if (req.body && req.body.fileName) {
-        // If client provides a desired (sanitized) name
-        const clientFileNameBase = path
-          .basename(req.body.fileName, path.extname(req.body.fileName))
+        desiredBaseName = path
+          .basename(req.body.fileName, path.extname(req.body.fileName)) // Remove extension from client name
           .replace(/[^a-zA-Z0-9_-]/g, "_");
-        key = `${companyFolder}/public/${s3SubFolder}/${clientFileNameBase}_${timestamp}.webp`;
-      } else {
-        key = `${companyFolder}/public/${s3SubFolder}/${baseName}_${timestamp}.webp`;
       }
+      
+      key = `${companyFolder}/public/${s3SubFolder}/${desiredBaseName}_${timestamp}${fileExtension}`;
+
 
       const cmd = new PutObjectCommand({
         Bucket: process.env.AWS_BUCKET,
         Key: key,
-        ContentType: "image/webp",
-        // ACL: 'public-read', // If your bucket isn't public by default and you need direct S3 URLs
+        Body: processedBuffer, // Use processed buffer
+        ContentType: contentType, // Use determined content type
       });
-      const presignedUrl = await getSignedUrl(s3, cmd, { expiresIn: 300 }); // 5 minutes to upload
+      
+      // For PUT, presigned URL is for uploading, not for public access after upload.
+      // await s3.send(cmd); // Direct upload without pre-signed URL for PUT by server
 
-      // Construct the public URL. This assumes your bucket objects are publicly readable
-      // or you are using CloudFront.
-      const publicUrl = `https://${process.env.AWS_BUCKET}.s3.${
-        process.env.AWS_REGION || "your-default-aws-region"
-      }.amazonaws.com/${key}`;
+      // If you want client to upload directly via presigned URL (more complex setup):
+      // const presignedPutUrl = await getSignedUrl(s3, cmd, { expiresIn: 300 });
+      // return res.json({ presignedUrl: presignedPutUrl, key });
+      // For server-side upload (simpler for this flow):
+      await s3.send(cmd);
 
-      return res.json({ presignedUrl, publicUrl, key }); // Return key for easier deletion/reference
+
+      const publicUrl = `https://${process.env.AWS_BUCKET}.s3.${process.env.AWS_REGION}.amazonaws.com/${key}`;
+
+      return res.json({ publicUrl, key }); // Return key for easier deletion/reference
     } catch (err) {
       console.error(
         `Error in S3 upload handler for ${fieldName}:`,
         err.message,
         err.stack
       );
-      return res
-        .status(500)
-        .json({
-          error: err.message || "Internal server error during S3 upload",
-        });
+      return res.status(500).json({
+        error: err.message || "Internal server error during S3 upload",
+      });
     }
   };
 };
@@ -3234,184 +3379,76 @@ const createS3UploadHandler = (fieldName, s3SubFolder) => {
 app.post(
   "/uploadPackageImage",
   uploadMemory.single("packageImage"),
-  createS3UploadHandler("packageImage", "package")
+  createS3UploadHandler("packageImage", "package_images") // Changed subfolder
 );
 app.post(
   "/uploadItemImage",
   uploadMemory.single("itemImage"),
-  createS3UploadHandler("itemImage", "item")
+  createS3UploadHandler("itemImage", "item_images") // Changed subfolder
 );
 app.post(
   "/uploadVerifyImg",
   uploadMemory.single("verifyImg"),
-  createS3UploadHandler("verifyImg", "verify")
-); // 'uploads' was original prefix, changed to 'verify'
+  createS3UploadHandler("verifyImg", "verify_images") // Changed subfolder
+);
+app.post( // New route for general S3 logo uploads
+    "/uploadS3Logo",
+    uploadMemory.single("logoFile"), // field name for the file
+    createS3UploadHandler("logoFile", "logos")
+);
+app.post( // New route for general S3 slip uploads
+    "/uploadS3Slip",
+    uploadMemory.single("slipFile"),
+    createS3UploadHandler("slipFile", "slips")
+);
+app.post( // New route for general S3 document uploads
+    "/uploadS3Document",
+    uploadMemory.single("documentFile"),
+    createS3UploadHandler("documentFile", "documents")
+);
+app.post( // New route for employee image uploads to S3
+    "/uploadEmployeeImage",
+    uploadMemory.single("employeeImageFile"),
+    createS3UploadHandler("employeeImageFile", "employee_images")
+);
+
 
 // DELETING LOCAL FILES (These routes are problematic on ephemeral filesystems like Railway)
 // Consider if these are still needed or if S3 deletion is primary.
 // If keeping, ensure photo_url is just the filename for local files.
+// For S3, you'd call deleteS3Object directly from the business logic routes (e.g., deleteitem, deletepackage).
 
-app.post("/deleteLogoImages", (req, res) => {
-  // Assumes photo_url is a filename prefix for local files
-  if (!req.body || typeof req.body.photo_url !== "string") {
-    return res
-      .status(400)
-      .json({ success: false, message: "photo_url (string) is required." });
-  }
-  const { photo_url } = req.body;
-  const imgDir = getLocalUploadPath("img");
-  if (!imgDir)
-    return res
-      .status(500)
-      .json({ success: false, message: "Image directory not configured." });
+app.post("/deleteLocalFile", (req, res) => { // Generic local file deleter
+    if (!req.body || typeof req.body.filePath !== 'string') { // Expecting a relative path like 'img/filename.jpg'
+        return res.status(400).json({ success: false, message: "filePath (relative string like 'img/filename.jpg') is required." });
+    }
+    const { filePath: relativeFilePath } = req.body;
 
-  try {
-    if (fs.existsSync(imgDir)) {
-      const files = fs.readdirSync(imgDir);
-      const logoFiles = files.filter((file) => file.startsWith(photo_url));
-      let deletedCount = 0;
-      logoFiles.forEach((file) => {
-        try {
-          fs.unlinkSync(path.join(imgDir, file));
-          console.log(`Locally deleted file: ${file}`);
-          deletedCount++;
-        } catch (e) {
-          console.error(`Error deleting local file ${file}:`, e.message);
+    if (!process.env.RAILWAY_VOLUME_MOUNT_PATH) {
+        return res.status(500).json({ success: false, message: "Local storage volume not configured." });
+    }
+
+    // Construct full path carefully, sanitize to prevent path traversal
+    const baseUploadsDir = path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, "uploads");
+    const fullFilePath = path.join(baseUploadsDir, path.normalize(relativeFilePath));
+
+    // Security check: ensure the resolved path is still within the intended uploads directory
+    if (!fullFilePath.startsWith(baseUploadsDir)) {
+        return res.status(400).json({ success: false, message: "Invalid file path." });
+    }
+
+    try {
+        if (fs.existsSync(fullFilePath)) {
+            fs.unlinkSync(fullFilePath);
+            console.log(`Locally deleted file: ${fullFilePath}`);
+            res.status(200).json({ success: true, message: `Local file ${relativeFilePath} deleted successfully.` });
+        } else {
+            res.status(404).json({ success: false, message: `Local file ${relativeFilePath} not found.` });
         }
-      });
-      res
-        .status(200)
-        .json({
-          success: true,
-          message: `Attempted to delete ${logoFiles.length} local logo image(s), successfully deleted ${deletedCount}.`,
-        });
-    } else {
-      res
-        .status(200)
-        .json({
-          success: true,
-          message: "Image directory does not exist, 0 files deleted.",
-        });
+    } catch (error) {
+        console.error("Error handling local deleteLocalFile request:", error.message);
+        res.status(500).json({ success: false, message: "Internal server error during local file deletion." });
     }
-  } catch (error) {
-    console.error(
-      "Error handling local deleteLogoImages request:",
-      error.message
-    );
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: "Internal server error during local file deletion.",
-      });
-  }
-});
-
-// This route is identical to deleteLogoImages logic-wise, might be redundant
-app.post("/deletePackageImages", (req, res) => {
-  if (!req.body || typeof req.body.photo_url !== "string") {
-    return res
-      .status(400)
-      .json({ success: false, message: "photo_url (string) is required." });
-  }
-  const { photo_url } = req.body;
-  const imgDir = getLocalUploadPath("img");
-  if (!imgDir)
-    return res
-      .status(500)
-      .json({ success: false, message: "Image directory not configured." });
-
-  try {
-    if (fs.existsSync(imgDir)) {
-      const files = fs.readdirSync(imgDir);
-      const packageFiles = files.filter((file) => file.startsWith(photo_url)); // Assuming prefix match
-      let deletedCount = 0;
-      packageFiles.forEach((file) => {
-        try {
-          fs.unlinkSync(path.join(imgDir, file));
-          console.log(`Locally deleted package image: ${file}`);
-          deletedCount++;
-        } catch (e) {
-          console.error(
-            `Error deleting local package image ${file}:`,
-            e.message
-          );
-        }
-      });
-      res
-        .status(200)
-        .json({
-          success: true,
-          message: `Attempted to delete ${packageFiles.length} local package image(s), successfully deleted ${deletedCount}.`,
-        });
-    } else {
-      res
-        .status(200)
-        .json({
-          success: true,
-          message: "Image directory does not exist, 0 files deleted.",
-        });
-    }
-  } catch (error) {
-    console.error(
-      "Error handling local deletePackageImages request:",
-      error.message
-    );
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: "Internal server error during local file deletion.",
-      });
-  }
-});
-
-app.post("/deleteImagesByName", (req, res) => {
-  // Deletes a single local file by exact name
-  if (!req.body || typeof req.body.photo_url !== "string") {
-    return res
-      .status(400)
-      .json({
-        success: false,
-        message: "photo_url (filename string) is required.",
-      });
-  }
-  const { photo_url: fileName } = req.body;
-  const imgDir = getLocalUploadPath("img"); // Assuming images are in 'img' subfolder
-  if (!imgDir)
-    return res
-      .status(500)
-      .json({ success: false, message: "Image directory not configured." });
-
-  const filePath = path.join(imgDir, path.basename(fileName)); // Sanitize to prevent path traversal
-
-  try {
-    if (fs.existsSync(filePath)) {
-      fs.unlinkSync(filePath);
-      console.log(`Locally deleted file by name: ${fileName}`);
-      res
-        .status(200)
-        .json({
-          success: true,
-          message: `Local file ${fileName} deleted successfully.`,
-        });
-    } else {
-      res
-        .status(404)
-        .json({ success: false, message: `Local file ${fileName} not found.` });
-    }
-  } catch (error) {
-    console.error(
-      "Error handling local deleteImagesByName request:",
-      error.message
-    );
-    res
-      .status(500)
-      .json({
-        success: false,
-        message: "Internal server error during local file deletion.",
-      });
-  }
 });
 
 // Example search (ensure DB is switched if needed)
@@ -3421,7 +3458,7 @@ app.get("/searchByTracking", async (req, res) => {
     return res.status(400).json({ error: "trackingNumber is required." });
   }
   try {
-    await switchToEmployeeDB(emp_id); // Switch DB based on logged-in user
+    await switchToEmployeeDB(emp_id); 
     const results = await q(
       `SELECT c.customer_id, c.contact, c.type, c.level, c.note
        FROM customers c
@@ -3434,7 +3471,7 @@ app.get("/searchByTracking", async (req, res) => {
         .status(404)
         .json({ error: "No customer found for this tracking number." });
     }
-    res.json(results); // Returns array of customers (usually one)
+    res.json(results); 
   } catch (e) {
     console.error(
       "Error in /searchByTracking:",
@@ -3449,21 +3486,33 @@ app.get("/searchByTracking", async (req, res) => {
 
 // Global error handler (simple version)
 app.use((err, req, res, next) => {
-  console.error("Unhandled error:", err.stack);
-  // Avoid sending stack trace in production
+  console.error("Unhandled error:", err.message, err.stack); // Log stack for debugging
   const errorMessage =
     process.env.NODE_ENV === "production"
       ? "An unexpected error occurred."
       : err.message;
-  res
-    .status(err.status || 500)
-    .json({
-      error: errorMessage,
-      ...(process.env.NODE_ENV !== "production" && { stack: err.stack }),
-    });
+  res.status(err.status || 500).json({
+    error: errorMessage,
+    // Optionally include stack in dev but not prod
+    ...(process.env.NODE_ENV !== "production" && { stack: err.stack }),
+  });
 });
 
 const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`Server is running on port ${PORT}`);
-});
+
+function startServerIfReady() {
+  if (dbConnected && companyDbConnected) {
+    app.listen(PORT, () => {
+      console.log(`Server is running on port ${PORT}`);
+      if (process.env.RAILWAY_VOLUME_MOUNT_PATH) {
+        console.log(
+          `Persistent volume expected at: ${process.env.RAILWAY_VOLUME_MOUNT_PATH}`
+        );
+      } else {
+        console.warn(
+          "RAILWAY_VOLUME_MOUNT_PATH is not set. File system operations needing persistence will fail or use ephemeral storage."
+        );
+      }
+    });
+  }
+}
