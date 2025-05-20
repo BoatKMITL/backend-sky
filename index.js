@@ -745,12 +745,12 @@ app.post("/addpackage", (req, res) => {
   const tracking_number = req.body.tracking_number;
   const photo_url = req.body.photo_url;
   if (req.body.subbox_cost !== undefined) {
-    const subbox_cost = req.body.subbox_cost;
+    const packages_cost = req.body.subbox_cost;
     const query1 =
-      "INSERT INTO `packages` (`tracking_number`, `customer_id`, `subbox_cost`, `photo_url`) VALUES (?, ?, ?);";
+      "INSERT INTO `packages` (`tracking_number`, `customer_id`, `packages_cost`, `photo_url`) VALUES (?, ?, ?);";
     db.query(
       query1,
-      [tracking_number, processedcustomer_id, subbox_cost, photo_url],
+      [tracking_number, processedcustomer_id, packages_cost, photo_url],
       (err, results) => {
         if (err) {
           console.error("Error fetching data:", err.message);
