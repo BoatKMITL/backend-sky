@@ -1756,20 +1756,33 @@ app.get("/appointment", (req, res) => {
   });
 });
 
-app.post("/addappoint", (req, res) => {
-  // รับค่าจาก request body
+app.post("/addappoint", async (req, res) => {
+  // <--- 1. ทำให้เป็น async function
+  // 2. รับ emp_id จาก req.body (ซึ่ง middleware global ควรจะถอดรหัสให้แล้ว)
+  const emp_id = req.body.emp_id;
+
+  // 3. รับค่าอื่นๆ จาก request body
   const title = req.body.title; // นี่คือ customerId จาก frontend
   const address_pickup = req.body.address_pickup;
   const phone_pickup = req.body.phone_pickup;
   const name_pickup = req.body.name_pickup;
   const position = req.body.position;
   const vehicle = req.body.vehicle;
-  const note = req.body.note; // รับค่า note (อาจจะเป็น "" ถ้า frontend ไม่ได้กรอก)
+  const note = req.body.note;
   const pickupdate = req.body.pickupdate;
   const pickupTime = req.body.pickupTime;
-  // const emp_id = req.body.emp_id; // Frontend ไม่ได้ส่ง emp_id มาใน payload ล่าสุดแล้ว
 
-  // --- เพิ่มการตรวจสอบค่าที่จำเป็นเบื้องต้น ---
+  // --- 4. ตรวจสอบว่ามี emp_id หรือไม่ ---
+  if (!emp_id) {
+    console.error("Validation Error: emp_id is required for /addappoint");
+    return res.status(400).json({
+      error: "Bad Request: emp_id is required.",
+      details:
+        "emp_id is required to determine the target database for appointment.",
+    });
+  }
+
+  // --- 5. ตรวจสอบค่าที่จำเป็นเบื้องต้นอื่นๆ ---
   if (
     !title ||
     !address_pickup ||
@@ -1780,9 +1793,8 @@ app.post("/addappoint", (req, res) => {
     !pickupdate ||
     !pickupTime
   ) {
-    // `note` ไม่จำเป็นต้องเช็คที่นี่ เพราะเราอนุญาตให้เป็น empty string
     console.error(
-      "Validation Error: Missing required fields in request body",
+      "Validation Error: Missing required fields in request body for /addappoint",
       req.body
     );
     return res.status(400).json({
@@ -1791,72 +1803,93 @@ app.post("/addappoint", (req, res) => {
     });
   }
 
-  // สร้าง start_time และ end_time
+  // --- 6. สร้าง start_time และ end_time ---
   let start_time, end_time;
   try {
-    const dateTime = new Date(`${pickupdate}T${pickupTime}:00.000Z`); // Assume UTC or server's local time based on how you handle it
+    const dateTime = new Date(`${pickupdate}T${pickupTime}:00.000Z`);
     if (isNaN(dateTime.getTime())) {
-      // ตรวจสอบว่า Date object ถูกต้องหรือไม่
       throw new Error("Invalid date or time format for pickupdate/pickupTime.");
     }
-    start_time = dateTime.toISOString().slice(0, 19).replace("T", " "); // Format YYYY-MM-DD HH:MM:SS
-    dateTime.setMinutes(dateTime.getMinutes() + 30); // สมมติว่าระยะเวลาการนัดหมายคือ 30 นาที
+    start_time = dateTime.toISOString().slice(0, 19).replace("T", " ");
+    dateTime.setMinutes(dateTime.getMinutes() + 30);
     end_time = dateTime.toISOString().slice(0, 19).replace("T", " ");
   } catch (dateError) {
-    console.error("Error processing date/time:", dateError.message, {
-      pickupdate,
-      pickupTime,
-    });
+    console.error(
+      "Error processing date/time for /addappoint:",
+      dateError.message,
+      {
+        pickupdate,
+        pickupTime,
+      }
+    );
     return res.status(400).json({
       error: "Bad Request: Invalid date or time.",
       details: dateError.message,
     });
   }
 
-  // SQL Query (ตรงกับ Schema ที่ title และ customer_id คือค่าเดียวกัน และไม่มี emp_id)
-  // และมี 10 placeholders (?) สำหรับ 10 ค่า
-  const query1 =
-    "INSERT INTO `appointment` (`title`, `start_date`, `end_date`, `note`, `customer_id`, `address_pickup`, `phone_pickup`, `name_pickup`, `position`, `vehicle`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
+  // --- 7. ใช้ try...catch เพื่อจัดการ error จากการสลับ DB และการ query ---
+  try {
+    // ++++++++++++++ 8. สลับฐานข้อมูล ++++++++++++++
+    await switchToEmployeeDB(emp_id);
+    // ++++++++++++++++++++++++++++++++++++++++++++
 
-  const valuesToInsert = [
-    title, // -> title (column)
-    start_time, // -> start_date
-    end_time, // -> end_date
-    note, // -> note
-    title, // -> customer_id (column, ใช้ค่าเดียวกับ title ที่เป็น customerId จาก frontend)
-    address_pickup, // -> address_pickup
-    phone_pickup, // -> phone_pickup
-    name_pickup, // -> name_pickup
-    position, // -> position
-    vehicle, // -> vehicle
-  ];
+    const query1 =
+      "INSERT INTO `appointment` (`title`, `start_date`, `end_date`, `note`, `customer_id`, `address_pickup`, `phone_pickup`, `name_pickup`, `position`, `vehicle`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
 
-  // --- Log ค่าที่จะ Insert เพื่อ Debug ---
-  console.log(
-    "Attempting to insert into appointment table with values:",
-    valuesToInsert
-  );
+    const valuesToInsert = [
+      title,
+      start_time,
+      end_time,
+      note,
+      title, // customer_id ใช้ค่าเดียวกับ title
+      address_pickup,
+      phone_pickup,
+      name_pickup,
+      position,
+      vehicle,
+    ];
 
-  db.query(query1, valuesToInsert, (err, results) => {
-    if (err) {
-      // --- ส่ง SQL error message กลับไปให้ Frontend ---
-      console.error("Database query error:", err); // Log error ทั้ง object เพื่อดู property อื่นๆ เช่น err.sql, err.sqlState
-      return res.status(500).json({
-        error: "Database operation failed.", // ข้อความทั่วไป
-        details: err.message, // *** ข้อความ error จาก MySQL โดยตรง ***
-        sqlState: err.sqlState, // Optional: รหัสสถานะ SQL
-        errno: err.errno, // Optional: หมายเลข error
+    console.log(
+      `Attempting to insert into appointment table (DB for emp_id: ${emp_id}) with values:`,
+      valuesToInsert
+    );
+
+    // 9. ทำการ query (ใช้ q function ถ้าคุณได้ define q ที่ใช้ db connection ที่ถูกสลับแล้ว)
+    const results = await q(query1, valuesToInsert); // สมมติว่า q() ใช้ตัวแปร `db` ที่ถูก update โดย switchToEmployeeDB
+
+    console.log(
+      "Appointment created successfully for emp_id " + emp_id + ":",
+      results
+    );
+    res.status(201).json({
+      message: "Appointment scheduled successfully!",
+      appointmentId: results.insertId,
+    });
+  } catch (err) {
+    // --- 10. จัดการ Error ---
+    console.error(`Error in /addappoint route for emp_id ${emp_id}:`, err);
+
+    // ตรวจสอบว่าเป็น error object จาก switchToEmployeeDB (ที่มี .status และ .msg)
+    // หรือ error จาก MySQL query (ที่มี .message, .sqlState, .errno)
+    if (err.status && err.msg) {
+      // Error จาก switchToEmployeeDB
+      return res.status(err.status).json({
+        error: err.msg, // เช่น "Employee not found" หรือ "Failed to switch database"
+        details: err.err
+          ? err.err.message
+          : "Error related to database switching or employee data.",
       });
     } else {
-      // --- ตอบกลับเมื่อสำเร็จ ---
-      console.log("Appointment created successfully:", results);
-      res.status(201).json({
-        // ใช้ 201 Created สำหรับการสร้าง resource ใหม่
-        message: "Appointment scheduled successfully!",
-        appointmentId: results.insertId, // ส่ง ID ของรายการที่เพิ่งสร้างกลับไป
+      // Error จาก MySQL query (เช่น ER_NO_SUCH_TABLE ใน DB ของบริษัท, หรือปัญหา FK, etc.)
+      return res.status(500).json({
+        error: "Database operation failed while adding appointment.",
+        details: err.message, // ข้อความ error จาก MySQL โดยตรง
+        sqlState: err.sqlState,
+        errno: err.errno,
       });
     }
-  });
+  }
 });
 
 app.post("/editappoint", (req, res) => {
