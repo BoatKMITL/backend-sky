@@ -1757,50 +1757,106 @@ app.get("/appointment", (req, res) => {
 });
 
 app.post("/addappoint", (req, res) => {
-  const title = req.body.title;
+  // รับค่าจาก request body
+  const title = req.body.title; // นี่คือ customerId จาก frontend
   const address_pickup = req.body.address_pickup;
   const phone_pickup = req.body.phone_pickup;
   const name_pickup = req.body.name_pickup;
   const position = req.body.position;
   const vehicle = req.body.vehicle;
-  const note = req.body.note;
+  const note = req.body.note; // รับค่า note (อาจจะเป็น "" ถ้า frontend ไม่ได้กรอก)
   const pickupdate = req.body.pickupdate;
   const pickupTime = req.body.pickupTime;
-  const dateTime = new Date(`${pickupdate}T${pickupTime}:00.000Z`);
-  const start_time = dateTime
-    .toISOString()
-    .replace("T", " ")
-    .replace(".000Z", "");
-  dateTime.setMinutes(dateTime.getMinutes() + 30);
-  const end_time = dateTime
-    .toISOString()
-    .replace("T", " ")
-    .replace(".000Z", "");
+  // const emp_id = req.body.emp_id; // Frontend ไม่ได้ส่ง emp_id มาใน payload ล่าสุดแล้ว
+
+  // --- เพิ่มการตรวจสอบค่าที่จำเป็นเบื้องต้น ---
+  if (
+    !title ||
+    !address_pickup ||
+    !phone_pickup ||
+    !name_pickup ||
+    !position ||
+    !vehicle ||
+    !pickupdate ||
+    !pickupTime
+  ) {
+    // `note` ไม่จำเป็นต้องเช็คที่นี่ เพราะเราอนุญาตให้เป็น empty string
+    console.error(
+      "Validation Error: Missing required fields in request body",
+      req.body
+    );
+    return res.status(400).json({
+      error: "Bad Request: Missing required fields.",
+      details: "One or more required fields are missing from the request body.",
+    });
+  }
+
+  // สร้าง start_time และ end_time
+  let start_time, end_time;
+  try {
+    const dateTime = new Date(`${pickupdate}T${pickupTime}:00.000Z`); // Assume UTC or server's local time based on how you handle it
+    if (isNaN(dateTime.getTime())) {
+      // ตรวจสอบว่า Date object ถูกต้องหรือไม่
+      throw new Error("Invalid date or time format for pickupdate/pickupTime.");
+    }
+    start_time = dateTime.toISOString().slice(0, 19).replace("T", " "); // Format YYYY-MM-DD HH:MM:SS
+    dateTime.setMinutes(dateTime.getMinutes() + 30); // สมมติว่าระยะเวลาการนัดหมายคือ 30 นาที
+    end_time = dateTime.toISOString().slice(0, 19).replace("T", " ");
+  } catch (dateError) {
+    console.error("Error processing date/time:", dateError.message, {
+      pickupdate,
+      pickupTime,
+    });
+    return res.status(400).json({
+      error: "Bad Request: Invalid date or time.",
+      details: dateError.message,
+    });
+  }
+
+  // SQL Query (ตรงกับ Schema ที่ title และ customer_id คือค่าเดียวกัน และไม่มี emp_id)
+  // และมี 10 placeholders (?) สำหรับ 10 ค่า
   const query1 =
     "INSERT INTO `appointment` (`title`, `start_date`, `end_date`, `note`, `customer_id`, `address_pickup`, `phone_pickup`, `name_pickup`, `position`, `vehicle`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
-  db.query(
-    query1,
-    [
-      title,
-      start_time,
-      end_time,
-      note,
-      title,
-      address_pickup,
-      phone_pickup,
-      name_pickup,
-      position,
-      vehicle,
-    ],
-    (err, results) => {
-      if (err) {
-        console.error("Error fetching data:", err.message);
-        res.status(500).json({ error: "Failed to fetch data" });
-      } else {
-        res.send("Values Edited");
-      }
-    }
+
+  const valuesToInsert = [
+    title, // -> title (column)
+    start_time, // -> start_date
+    end_time, // -> end_date
+    note, // -> note
+    title, // -> customer_id (column, ใช้ค่าเดียวกับ title ที่เป็น customerId จาก frontend)
+    address_pickup, // -> address_pickup
+    phone_pickup, // -> phone_pickup
+    name_pickup, // -> name_pickup
+    position, // -> position
+    vehicle, // -> vehicle
+  ];
+
+  // --- Log ค่าที่จะ Insert เพื่อ Debug ---
+  console.log(
+    "Attempting to insert into appointment table with values:",
+    valuesToInsert
   );
+
+  db.query(query1, valuesToInsert, (err, results) => {
+    if (err) {
+      // --- ส่ง SQL error message กลับไปให้ Frontend ---
+      console.error("Database query error:", err); // Log error ทั้ง object เพื่อดู property อื่นๆ เช่น err.sql, err.sqlState
+      return res.status(500).json({
+        error: "Database operation failed.", // ข้อความทั่วไป
+        details: err.message, // *** ข้อความ error จาก MySQL โดยตรง ***
+        sqlState: err.sqlState, // Optional: รหัสสถานะ SQL
+        errno: err.errno, // Optional: หมายเลข error
+      });
+    } else {
+      // --- ตอบกลับเมื่อสำเร็จ ---
+      console.log("Appointment created successfully:", results);
+      res.status(201).json({
+        // ใช้ 201 Created สำหรับการสร้าง resource ใหม่
+        message: "Appointment scheduled successfully!",
+        appointmentId: results.insertId, // ส่ง ID ของรายการที่เพิ่งสร้างกลับไป
+      });
+    }
+  });
 });
 
 app.post("/editappoint", (req, res) => {
