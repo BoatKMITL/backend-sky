@@ -14,7 +14,11 @@ const sharp = require("sharp");
 require("dotenv").config();
 process.env.AWS_S3_DISABLE_CHECKSUMS = "true"; // ปิด CRC32 placeholder
 const { getSignedUrl } = require("@aws-sdk/s3-request-presigner");
-const { S3Client, PutObjectCommand } = require("@aws-sdk/client-s3");
+const {
+  S3Client,
+  PutObjectCommand,
+  DeleteObjectCommand,
+} = require("@aws-sdk/client-s3");
 
 const s3 = new S3Client({
   region: process.env.AWS_REGION,
@@ -67,8 +71,7 @@ const db = mysql.createConnection({
   password: "LN5avYu2KUwGDR6Ytreg",
   port: "3306",
   database: "sharebil_sky4you",
-  timezone: "+07:00",    // ← เพิ่มตรงนี้
-
+  timezone: "+07:00", // ← เพิ่มตรงนี้
 });
 
 const companydb = mysql.createConnection({
@@ -77,9 +80,56 @@ const companydb = mysql.createConnection({
   password: "LN5avYu2KUwGDR6Ytreg",
   port: "3306",
   database: "sharebil_sky4you",
-  timezone: "+07:00",    // ← เพิ่มตรงนี้
-
+  timezone: "+07:00", // ← เพิ่มตรงนี้
 });
+
+// ... หลังการตั้งค่า S3Client หรือในส่วน Utilities
+
+/**
+ * ดึง S3 object key จาก URL ของ S3
+ * @param {string} url URL เต็มของ S3
+ * @returns {string|null} S3 object key หรือ null ถ้า URL ไม่ถูกต้อง
+ */
+function extractS3KeyFromUrl(url) {
+  if (!url) return null;
+  try {
+    const urlObject = new URL(url);
+    // ตัวอย่าง URL: https://my-bucket.s3.my-region.amazonaws.com/path/to/object.jpg
+    // pathname จะเป็น /path/to/object.jpg เราต้องลบ / ตัวแรกออก
+    if (urlObject.hostname.endsWith(".amazonaws.com")) {
+      return urlObject.pathname.startsWith("/")
+        ? urlObject.pathname.substring(1)
+        : urlObject.pathname;
+    }
+    return null;
+  } catch (e) {
+    console.error("URL ไม่ถูกต้องสำหรับการดึง S3 key:", url, e);
+    return null;
+  }
+}
+
+/**
+ * ลบอ็อบเจกต์ออกจาก S3
+ * @param {string} s3Key S3 object key
+ */
+async function deleteS3Object(s3Key) {
+  if (!s3Key) {
+    console.log("ไม่มี S3 key สำหรับการลบ");
+    return;
+  }
+  try {
+    const command = new DeleteObjectCommand({
+      Bucket: process.env.AWS_BUCKET, // <--- ตรวจสอบว่ามีตัวแปรนี้ใน .env
+      Key: s3Key,
+    });
+    await s3.send(command);
+    console.log(`ลบอ็อบเจกต์ S3 สำเร็จ: ${s3Key}`);
+  } catch (error) {
+    // ควร log error ไว้ แต่ไม่จำเป็นต้องทำให้ request ทั้งหมดล้มเหลว
+    // เพราะเป้าหมายหลักอาจเป็นการล้างข้อมูลใน DB
+    console.error(`ไม่สามารถลบอ็อบเจกต์ S3 ${s3Key}:`, error.message);
+  }
+}
 
 function q(sql, params = []) {
   return new Promise((resolve, reject) => {
@@ -283,36 +333,15 @@ app.get("/customers", async (req, res) => {
 
 /* --------------------- 3. /deleteCustomer (with Tx) --------------------- */
 app.post("/deleteCustomer", async (req, res) => {
+  // <--- ทำให้เป็น async
   const { customer_id } = req.body;
   if (!customer_id)
     return res
       .status(400)
       .json({ success: false, message: "Customer ID is required" });
 
-  /* คำสั่งที่จะรันตามลำดับ */
-  const statements = [
-    `DELETE FROM subbox_item
-         WHERE subbox_id IN (
-           SELECT subbox_id FROM subbox
-           WHERE box_id IN (SELECT box_id FROM box WHERE customer_id = ?)
-         )`,
-    `DELETE FROM subbox
-         WHERE box_id IN (SELECT box_id FROM box WHERE customer_id = ?)`,
-    `DELETE FROM slip
-         WHERE box_id IN (SELECT box_id FROM box WHERE customer_id = ?)`,
-    `DELETE FROM items
-         WHERE tracking_number IN (
-           SELECT tracking_number FROM packages WHERE customer_id = ?
-         )`,
-    `DELETE FROM packages WHERE customer_id = ?`,
-    `DELETE FROM box WHERE customer_id = ?`,
-    `DELETE FROM appointment WHERE customer_id = ?`,
-    `DELETE FROM addresses   WHERE customer_id = ?`,
-    `DELETE FROM customers   WHERE customer_id = ?`,
-  ];
-
-  /* ----- Transaction ----- */
   db.beginTransaction(async (txErr) => {
+    // <--- ทำให้ callback ของ transaction เป็น async
     if (txErr) {
       console.error("Error starting transaction:", txErr.message);
       return res
@@ -321,12 +350,61 @@ app.post("/deleteCustomer", async (req, res) => {
     }
 
     try {
-      /* รันทีละ statement */
+      // --- ส่วนลบข้อมูลจาก S3 ---
+      // 1. ดึง package ทั้งหมดของลูกค้า
+      const packagesToDelete = await q(
+        "SELECT tracking_number, photo_url FROM packages WHERE customer_id = ?",
+        [customer_id]
+      );
+
+      for (const pkg of packagesToDelete) {
+        // ลบรูปของ package
+        if (pkg.photo_url) {
+          const packageS3Key = extractS3KeyFromUrl(pkg.photo_url);
+          if (packageS3Key) await deleteS3Object(packageS3Key);
+        }
+
+        // ดึงและลบรูปของ item ใน package นี้
+        const itemsInPackage = await q(
+          "SELECT item_id, photo_url FROM items WHERE tracking_number = ?",
+          [pkg.tracking_number]
+        );
+        for (const item of itemsInPackage) {
+          if (item.photo_url) {
+            const itemS3Key = extractS3KeyFromUrl(item.photo_url);
+            if (itemS3Key) await deleteS3Object(itemS3Key);
+          }
+        }
+      }
+      // --- จบส่วนลบข้อมูลจาก S3 ---
+
+      // คำสั่งลบข้อมูลจาก DB เดิม
+      const statements = [
+        // ... (คำสั่ง SQL เดิมของคุณ) ...
+        `DELETE FROM subbox_item
+         WHERE subbox_id IN (
+           SELECT subbox_id FROM subbox
+           WHERE box_id IN (SELECT box_id FROM box WHERE customer_id = ?)
+         )`,
+        `DELETE FROM subbox
+         WHERE box_id IN (SELECT box_id FROM box WHERE customer_id = ?)`,
+        `DELETE FROM slip
+         WHERE box_id IN (SELECT box_id FROM box WHERE customer_id = ?)`,
+        `DELETE FROM items
+         WHERE tracking_number IN (
+           SELECT tracking_number FROM packages WHERE customer_id = ?
+         )`,
+        `DELETE FROM packages WHERE customer_id = ?`,
+        `DELETE FROM box WHERE customer_id = ?`,
+        `DELETE FROM appointment WHERE customer_id = ?`,
+        `DELETE FROM addresses   WHERE customer_id = ?`,
+        `DELETE FROM customers   WHERE customer_id = ?`,
+      ];
+
       for (const sql of statements) {
         await q(sql, [customer_id]);
       }
 
-      /* commit */
       db.commit((commitErr) => {
         if (commitErr) {
           console.error("Commit error:", commitErr.message);
@@ -338,11 +416,12 @@ app.post("/deleteCustomer", async (req, res) => {
         }
         return res.json({
           success: true,
-          message: "Customer and associated data deleted successfully",
+          message:
+            "Customer and associated data (including S3 images) deleted successfully",
         });
       });
     } catch (err) {
-      console.error("Tx query error:", err.message);
+      console.error("Tx query error during customer deletion:", err.message);
       db.rollback(() =>
         res.status(500).json({
           success: false,
@@ -554,52 +633,67 @@ app.post("/edititem", async (req, res) => {
 });
 
 app.post("/deleteitem", async (req, res) => {
+  // <--- ทำให้เป็น async
   const { customer_id, item_id } = req.body;
 
-  if (!customer_id || !item_id) {
-    return res.status(400).json({ error: "missing data" });
+  if (!item_id) {
+    return res.status(400).json({ error: "missing item_id" });
   }
 
   db.beginTransaction(async (txErr) => {
+    // <--- ทำให้ callback ของ transaction เป็น async
     if (txErr) {
-      console.error(txErr.message);
+      console.error("Transaction start error:", txErr.message);
       return res.status(500).json({ error: "transaction error" });
     }
 
     try {
-      /* ลบ item */
-      await q("DELETE FROM items WHERE item_id = ?", [item_id]);
-
-      /* นับ item_status=0 ที่เหลือของลูกค้านี้ */
-      const [{ count }] = await q(
-        `SELECT COUNT(*) AS count
-             FROM items
-             WHERE tracking_number IN (
-                   SELECT tracking_number FROM packages WHERE customer_id = ?
-             ) AND item_status = 0`,
-        [customer_id]
+      // 1. ดึง photo_url ของ item ก่อนที่จะลบออกจาก DB
+      const [itemToDelete] = await q(
+        "SELECT photo_url FROM items WHERE item_id = ?",
+        [item_id]
       );
 
-      /* ถ้าเหลือ 0 => reset status */
-      if (count === 0) {
-        await q(
-          "UPDATE customers SET status = NULL WHERE status != 'Unpaid' AND customer_id = ?",
+      // 2. ลบรูปภาพจาก S3 ถ้ามี photo_url
+      if (itemToDelete && itemToDelete.photo_url) {
+        const s3Key = extractS3KeyFromUrl(itemToDelete.photo_url);
+        if (s3Key) {
+          await deleteS3Object(s3Key); // <--- ลบจาก S3
+        }
+      }
+
+      // 3. ลบ item ออกจาก DB
+      await q("DELETE FROM items WHERE item_id = ?", [item_id]);
+
+      // 4. อัปเดต status ของลูกค้า (ถ้ามีการส่ง customer_id มาและเกี่ยวข้อง)
+      let message = "Item Deleted";
+      if (customer_id) {
+        const [{ count }] = await q(
+          `SELECT COUNT(*) AS count
+           FROM items
+           WHERE tracking_number IN (
+                 SELECT tracking_number FROM packages WHERE customer_id = ?
+           ) AND item_status = 0`,
           [customer_id]
         );
+
+        if (count === 0) {
+          await q(
+            "UPDATE customers SET status = NULL WHERE status != 'Unpaid' AND customer_id = ?",
+            [customer_id]
+          );
+          message = "Item Deleted and Customer Status Updated to NULL";
+        }
       }
 
       db.commit((commitErr) => {
         if (commitErr) {
-          console.error(commitErr.message);
+          console.error("Commit error:", commitErr.message);
           return db.rollback(() =>
             res.status(500).json({ error: "commit failed" })
           );
         }
-        return res.send(
-          count === 0
-            ? "Item Deleted and Customer Status Updated to NULL"
-            : "Item Deleted"
-        );
+        return res.send(message);
       });
     } catch (err) {
       console.error("deleteitem error:", err.message);
@@ -776,7 +870,6 @@ app.post("/addpackage", (req, res) => {
       }
     );
   }
-  
 });
 
 app.post("/editpackage", (req, res) => {
@@ -802,62 +895,96 @@ app.post("/editpackage", (req, res) => {
   );
 });
 
-app.post("/deletepackage", (req, res) => {
-  const customer_id = req.body.customer_id;
-  const tracking = req.body.tracking;
-  const query1 =
-    "DELETE FROM items WHERE `tracking_number` = ? AND item_status = 0;";
-  db.query(query1, [tracking], (err, results) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
+app.post("/deletepackage", async (req, res) => {
+  // <--- ทำให้เป็น async
+  const { customer_id, tracking } = req.body;
+
+  if (!tracking) {
+    return res
+      .status(400)
+      .json({ error: "Tracking number (tracking) is required" });
+  }
+
+  db.beginTransaction(async (txErr) => {
+    // <--- ทำให้ callback ของ transaction เป็น async
+    if (txErr) {
+      console.error("Transaction start error:", txErr.message);
+      return res.status(500).json({ error: "Transaction error" });
     }
-    const query2 =
-      "DELETE FROM `packages` WHERE `packages`.`tracking_number` = ?;";
-    db.query(query2, [tracking], (err, results) => {
-      if (err) {
-        res.send("Item Delete");
-      }
-      const query3 = `
-                SELECT COUNT(*) AS count 
-                FROM items 
-                WHERE tracking_number IN (
-                    SELECT tracking_number 
-                    FROM packages 
-                    WHERE customer_id = ?
-                ) AND item_status = 0
-            `;
 
-      db.query(query3, [customer_id], (err, results) => {
-        if (err) {
-          console.error("Error checking item statuses:", err.message);
-          return res
-            .status(500)
-            .json({ error: "Failed to check item statuses" });
+    try {
+      // 1. ดึง photo_url ของ package
+      const [packageData] = await q(
+        "SELECT photo_url FROM packages WHERE tracking_number = ?",
+        [tracking]
+      );
+      if (packageData && packageData.photo_url) {
+        const packageS3Key = extractS3KeyFromUrl(packageData.photo_url);
+        if (packageS3Key) {
+          await deleteS3Object(packageS3Key); // <--- ลบรูป package จาก S3
         }
+      }
 
-        const count = results[0].count;
+      // 2. ดึง item ทั้งหมดที่เกี่ยวข้องกับ package นี้และ photo_url ของพวกมัน
+      const itemsInPackage = await q(
+        "SELECT item_id, photo_url FROM items WHERE tracking_number = ?",
+        [tracking]
+      );
+      for (const item of itemsInPackage) {
+        if (item.photo_url) {
+          const itemS3Key = extractS3KeyFromUrl(item.photo_url);
+          if (itemS3Key) {
+            await deleteS3Object(itemS3Key); // <--- ลบรูป item จาก S3
+          }
+        }
+      }
+
+      // 3. ลบ items ออกจาก DB
+      // Query เดิมคือ "DELETE FROM items WHERE `tracking_number` = ? AND item_status = 0;"
+      // ถ้าลบ package ควรลบ item ทั้งหมดของ package นั้น ไม่ว่า status จะเป็นอะไร
+      await q("DELETE FROM items WHERE tracking_number = ?", [tracking]);
+
+      // 4. ลบ package ออกจาก DB
+      await q("DELETE FROM packages WHERE tracking_number = ?", [tracking]);
+
+      // 5. อัปเดต status ของลูกค้า (ถ้ามีการส่ง customer_id มา)
+      let message = "Package and associated items deleted.";
+      if (customer_id) {
+        const [{ count }] = await q(
+          `SELECT COUNT(*) AS count
+           FROM items i
+           JOIN packages p ON i.tracking_number = p.tracking_number
+           WHERE p.customer_id = ? AND i.item_status = 0`,
+          [customer_id]
+        );
 
         if (count === 0) {
-          // If all items have item_status = 0, update customer status to NULL
-          const query4 =
-            "UPDATE customers SET status = NULL WHERE customer_id = ? AND status != 'Unpaid'";
-
-          db.query(query4, [customer_id], (err) => {
-            if (err) {
-              console.error("Error updating customer status:", err.message);
-              return res
-                .status(500)
-                .json({ error: "Failed to update customer status" });
-            }
-
-            res.send("Item Deleted and Customer Status Updated to NULL");
-          });
-        } else {
-          res.send("Item Deleted");
+          await q(
+            "UPDATE customers SET status = NULL WHERE customer_id = ? AND status != 'Unpaid'",
+            [customer_id]
+          );
+          message =
+            "Package and items deleted. Customer Status Updated to NULL.";
         }
+      }
+
+      db.commit((commitErr) => {
+        if (commitErr) {
+          console.error("Commit error:", commitErr.message);
+          return db.rollback(() =>
+            res.status(500).json({ error: "Failed to commit transaction" })
+          );
+        }
+        res.send(message);
       });
-    });
+    } catch (err) {
+      console.error("Delete package error:", err.message);
+      db.rollback(() =>
+        res
+          .status(500)
+          .json({ error: "Failed to delete package and associated data" })
+      );
+    }
   });
 });
 
@@ -1629,7 +1756,7 @@ app.get("/appointment", (req, res) => {
   });
 });
 
-app.post("/addappoint", (req, res) => {
+app.post("/addappoint", async (req, res) => {
   const title = req.body.title;
   const address_pickup = req.body.address_pickup;
   const phone_pickup = req.body.phone_pickup;
@@ -1637,6 +1764,7 @@ app.post("/addappoint", (req, res) => {
   const position = req.body.position;
   const vehicle = req.body.vehicle;
   const note = req.body.note;
+  const emp_id = req.body.emp_id;
   const pickupdate = req.body.pickupdate;
   const pickupTime = req.body.pickupTime;
   const dateTime = new Date(`${pickupdate}T${pickupTime}:00.000Z`);
@@ -1649,11 +1777,9 @@ app.post("/addappoint", (req, res) => {
     .toISOString()
     .replace("T", " ")
     .replace(".000Z", "");
-  const query1 =
-    "INSERT INTO `appointment` (`title`, `start_date`, `end_date`, `note`, `customer_id`, `address_pickup`, `phone_pickup`, `name_pickup`, `position`, `vehicle`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);";
-  db.query(
-    query1,
-    [
+  try {
+    await switchToEmployeeDB(emp_id);
+    const rows = await q("INSERT INTO `appointment` (`title`, `start_date`, `end_date`, `note`, `customer_id`, `address_pickup`, `phone_pickup`, `name_pickup`, `position`, `vehicle`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);", [
       title,
       start_time,
       end_time,
@@ -1664,16 +1790,12 @@ app.post("/addappoint", (req, res) => {
       name_pickup,
       position,
       vehicle,
-    ],
-    (err, results) => {
-      if (err) {
-        console.error("Error fetching data:", err.message);
-        res.status(500).json({ error: "Failed to fetch data" });
-      } else {
-        res.send("Values Edited");
-      }
-    }
-  );
+    ]);
+    return res.json(rows); // *** คืนค่าเหมือนเดิม ***
+  } catch (e) {
+    console.error(e.msg || e.message);
+    return res.status(e.status || 500).json({ error: e.msg || "Error" });
+  }
 });
 
 app.post("/editappoint", (req, res) => {
@@ -2455,9 +2577,10 @@ app.post(
     }
 
     // ถอด emp_id ปกติ
-    const enc   = req.query.emp_id_raw || req.query.emp_id;
+    const enc = req.query.emp_id_raw || req.query.emp_id;
     const empId = req.query.emp_id_raw ? decryptEmpId(enc) : req.query.emp_id;
-    if (!empId) return res.status(400).json({ error: "Invalid or missing emp_id" });
+    if (!empId)
+      return res.status(400).json({ error: "Invalid or missing emp_id" });
 
     try {
       // หาชื่อโฟลเดอร์บริษัท
@@ -2465,10 +2588,11 @@ app.post(
         companydb.query(
           "SELECT emp_database FROM employee WHERE emp_id = ?",
           [empId],
-          (err, results) => err ? reject(err) : resolve(results)
+          (err, results) => (err ? reject(err) : resolve(results))
         );
       });
-      if (!rows.length) return res.status(404).json({ error: "Employee not found" });
+      if (!rows.length)
+        return res.status(404).json({ error: "Employee not found" });
       const companyFolder = rows[0].emp_database;
 
       // แปลงไฟล์เป็น WebP
@@ -2481,11 +2605,17 @@ app.post(
       let key;
       if (fileName) {
         // ถ้า client ส่งชื่อมา ก็ใช้ key นี้เลย
-        key = `${companyFolder}/public/item/${fileName.replace(/\.[^/.]+$/, ".webp")}`;
+        key = `${companyFolder}/public/item/${fileName.replace(
+          /\.[^/.]+$/,
+          ".webp"
+        )}`;
       } else {
         // ถ้าไม่ส่ง มาสร้าง key เอง
         const originalname = req.file.originalname;
-        const baseName = path.basename(originalname, path.extname(originalname));
+        const baseName = path.basename(
+          originalname,
+          path.extname(originalname)
+        );
         const timestamp = Date.now();
         key = `${companyFolder}/public/item/${baseName}_${timestamp}.webp`;
       }
@@ -2510,7 +2640,6 @@ app.post(
     }
   }
 );
-
 
 app.post("/uploadSlip", uploadImage.single("slip"), (req, res) => {
   try {
