@@ -1743,17 +1743,52 @@ app.post("/editpriority", (req, res) => {
 
 // appointment-------------------------------------------------------------------------------------------------------------------
 
-app.get("/appointment", (req, res) => {
-  const query =
-    "SELECT *, DATE_FORMAT(start_date, '%Y-%m-%d') AS formatted_start_date FROM appointment WHERE status = 'Pending' AND start_date > CURDATE() - INTERVAL 1 DAY;";
-  db.query(query, (err, results) => {
-    if (err) {
-      console.error("Error fetching data:", err.message);
-      res.status(500).json({ error: "Failed to fetch data" });
-    } else {
-      res.json(results);
-    }
-  });
+app.post("/addappoint", async (req, res) => {
+  const title = req.body.title;
+  const address_pickup = req.body.address_pickup;
+  const phone_pickup = req.body.phone_pickup;
+  const name_pickup = req.body.name_pickup;
+  const position = req.body.position;
+  const vehicle = req.body.vehicle;
+  const note = req.body.note;
+  const emp_id = req.body.emp_id;
+  const pickupdate = req.body.pickupdate;
+  const pickupTime = req.body.pickupTime;
+
+  // === จุดแก้ไขหลัก ===
+  // ไม่ต้องมี Z, ไม่ต้องใช้ toISOString
+  const start_time = `${pickupdate} ${pickupTime}:00`;
+
+  // เพิ่ม 30 นาที
+  const [sh, sm] = pickupTime.split(":").map(Number);
+  const endDate = new Date(pickupdate);
+  endDate.setHours(sh, sm + 30);
+  const eh = String(endDate.getHours()).padStart(2, "0");
+  const em = String(endDate.getMinutes()).padStart(2, "0");
+  const end_time = `${pickupdate} ${eh}:${em}:00`;
+
+  try {
+    await switchToEmployeeDB(emp_id);
+    const rows = await q(
+      "INSERT INTO `appointment` (`title`, `start_date`, `end_date`, `note`, `customer_id`, `address_pickup`, `phone_pickup`, `name_pickup`, `position`, `vehicle`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
+      [
+        title,
+        start_time,
+        end_time,
+        note,
+        title,
+        address_pickup,
+        phone_pickup,
+        name_pickup,
+        position,
+        vehicle,
+      ]
+    );
+    return res.json(rows);
+  } catch (e) {
+    console.error(e.msg || e.message);
+    return res.status(e.status || 500).json({ error: e.msg || "Error" });
+  }
 });
 
 app.post("/addappoint", async (req, res) => {
@@ -1801,55 +1836,7 @@ app.post("/addappoint", async (req, res) => {
   }
 });
 
-// app.post("/editappoint", (req, res) => {
-//   const address_id = req.body.address_id;
-//   const address_pickup = req.body.address_pickup;
-//   const phone_pickup = req.body.phone_pickup;
-//   const name_pickup = req.body.name_pickup;
-//   const position = req.body.position;
-//   const vehicle = req.body.vehicle;
-//   const note = req.body.note;
-//   const query1 =
-//     "UPDATE `appointment` SET `note` = ?, `address_pickup` = ?, `phone_pickup` = ?, `name_pickup` = ?, `position` = ?, `vehicle` = ? WHERE `appointment`.`appoint_id` = ?;";
-//   db.query(
-//     query1,
-//     [
-//       note,
-//       address_pickup,
-//       phone_pickup,
-//       name_pickup,
-//       position,
-//       vehicle,
-//       address_id,
-//     ],
-//     (err, results) => {
-//       if (err) {
-//         console.error("Error fetching data:", err.message);
-//         res.status(500).json({ error: "Failed to fetch data" });
-//       } else {
-//         res.send("Values Edited");
-//       }
-//     }
-//   );
-// });
-
 app.post("/editappoint", (req, res) => {
-  console.log("\n=== EDIT APPOINTMENT DEBUG START ===");
-  console.log("Current Date and Time (UTC):", new Date().toISOString());
-  console.log(
-    "Current Date and Time (Bangkok):",
-    new Date().toLocaleString("th-TH", {
-      timeZone: "Asia/Bangkok",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    })
-  );
-  console.log("Current User's Login: Nonpipat");
-
   const address_id = req.body.address_id;
   const address_pickup = req.body.address_pickup;
   const phone_pickup = req.body.phone_pickup;
@@ -1857,67 +1844,11 @@ app.post("/editappoint", (req, res) => {
   const position = req.body.position;
   const vehicle = req.body.vehicle;
   const note = req.body.note;
-
-  console.log("Request Body Data:");
-  console.log("- address_id:", address_id);
-  console.log("- address_pickup:", address_pickup);
-  console.log("- phone_pickup:", phone_pickup);
-  console.log("- name_pickup:", name_pickup);
-  console.log("- position:", position);
-  console.log("- vehicle:", vehicle);
-  console.log("- note:", note);
-
-  // ก่อน update ให้ดึงข้อมูลเดิมมาดูก่อน
-  const selectQuery = `
-    SELECT *, 
-           DATE_FORMAT(start_date, '%Y-%m-%d %H:%i:%s') AS formatted_datetime,
-           DATE_FORMAT(start_date, '%H:%i:%s') AS time_only,
-           UNIX_TIMESTAMP(start_date) AS timestamp
-    FROM appointment 
-    WHERE appoint_id = ?
-  `;
-
-  console.log("Fetching existing data for appoint_id:", address_id);
-
-  db.query(selectQuery, [address_id], (selectErr, selectResults) => {
-    if (selectErr) {
-      console.error("Error fetching existing data:", selectErr.message);
-    } else if (selectResults.length > 0) {
-      console.log("Existing appointment data:");
-      console.log("- start_date (raw):", selectResults[0].start_date);
-      console.log("- start_date type:", typeof selectResults[0].start_date);
-      console.log("- formatted_datetime:", selectResults[0].formatted_datetime);
-      console.log("- time_only:", selectResults[0].time_only);
-      console.log("- timestamp:", selectResults[0].timestamp);
-
-      // แปลงเป็น Date object และดู
-      if (selectResults[0].start_date) {
-        const dateObj = new Date(selectResults[0].start_date);
-        console.log("- as Date object:", dateObj);
-        console.log("- Date toISOString:", dateObj.toISOString());
-        console.log("- Date toString:", dateObj.toString());
-        console.log(
-          "- Date toLocaleString (Bangkok):",
-          dateObj.toLocaleString("th-TH", {
-            timeZone: "Asia/Bangkok",
-          })
-        );
-      }
-    } else {
-      console.log("No existing appointment found with appoint_id:", address_id);
-    }
-
-    // ตอนนี้ทำการ update
-    const query1 = `
-      UPDATE appointment 
-      SET note = ?, address_pickup = ?, phone_pickup = ?, 
-          name_pickup = ?, position = ?, vehicle = ? 
-      WHERE appoint_id = ?
-    `;
-
-    console.log("Executing UPDATE query...");
-    console.log("Query:", query1);
-    console.log("Parameters:", [
+  const query1 =
+    "UPDATE `appointment` SET `note` = ?, `address_pickup` = ?, `phone_pickup` = ?, `name_pickup` = ?, `position` = ?, `vehicle` = ? WHERE `appointment`.`appoint_id` = ?;";
+  db.query(
+    query1,
+    [
       note,
       address_pickup,
       phone_pickup,
@@ -1925,61 +1856,16 @@ app.post("/editappoint", (req, res) => {
       position,
       vehicle,
       address_id,
-    ]);
-
-    db.query(
-      query1,
-      [
-        note,
-        address_pickup,
-        phone_pickup,
-        name_pickup,
-        position,
-        vehicle,
-        address_id,
-      ],
-      (err, results) => {
-        if (err) {
-          console.error("UPDATE Error:", err.message);
-          console.log("=== EDIT APPOINTMENT DEBUG END ===\n");
-          res.status(500).json({ error: "Failed to update data" });
-        } else {
-          console.log("UPDATE Success!");
-          console.log("- Affected rows:", results.affectedRows);
-          console.log("- Changed rows:", results.changedRows);
-          console.log("- Info:", results.info);
-
-          // หลัง update ให้ดึงข้อมูลใหม่มาดู
-          db.query(
-            selectQuery,
-            [address_id],
-            (postSelectErr, postSelectResults) => {
-              if (!postSelectErr && postSelectResults.length > 0) {
-                console.log("Updated appointment data:");
-                console.log(
-                  "- start_date (raw):",
-                  postSelectResults[0].start_date
-                );
-                console.log(
-                  "- formatted_datetime:",
-                  postSelectResults[0].formatted_datetime
-                );
-                console.log("- time_only:", postSelectResults[0].time_only);
-              }
-
-              console.log("=== EDIT APPOINTMENT DEBUG END ===\n");
-              res.json({
-                success: true,
-                message: "Values Edited",
-                affectedRows: results.affectedRows,
-                changedRows: results.changedRows,
-              });
-            }
-          );
-        }
+    ],
+    (err, results) => {
+      if (err) {
+        console.error("Error fetching data:", err.message);
+        res.status(500).json({ error: "Failed to fetch data" });
+      } else {
+        res.send("Values Edited");
       }
-    );
-  });
+    }
+  );
 });
 
 // ThaiBox-------------------------------------------------------------------------------------------------------------------
