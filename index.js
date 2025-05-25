@@ -312,40 +312,61 @@ app.post("/logout", (req, res) => {
 });
 // Home-------------------------------------------------------------------------------------------------------------------
 app.get("/allcustomers", async (req, res) => {
+  const { emp_id, target_emp_id } = req.query;
+  if (!emp_id) return res.status(400).json({ error: "emp_id is required" });
   try {
+    await switchToEmployeeDB(emp_id, target_emp_id);
     const rows = await q(
-      "SELECT c.*, COUNT( CASE WHEN NOT EXISTS ( SELECT 1 FROM items AS i WHERE i.tracking_number = p.tracking_number GROUP BY i.tracking_number HAVING MIN(i.item_status) = 1 AND MAX(i.item_status) = 1 ) THEN p.tracking_number END ) AS package_count FROM customers AS c LEFT JOIN packages AS p ON c.customer_id = p.customer_id GROUP BY c.customer_id ORDER BY c.customer_date DESC;"
+      `SELECT c.*, 
+              COUNT(
+                CASE 
+                  WHEN NOT EXISTS (
+                    SELECT 1 
+                    FROM items i 
+                    WHERE i.tracking_number = p.tracking_number 
+                      AND (i.item_status = 1) 
+                  ) 
+                THEN p.tracking_number END
+              ) AS package_count
+       FROM customers c
+       LEFT JOIN packages p ON c.customer_id = p.customer_id
+       GROUP BY c.customer_id
+       ORDER BY c.customer_date DESC;`
     );
-    return res.json(rows);
+    res.json(rows);
   } catch (err) {
-    console.error("Error fetching all customers:", err.message);
-    return res.status(500).json({ error: "Failed to fetch data" });
+    console.error("Error in /allcustomers:", err);
+    res
+      .status(err.status || 500)
+      .json({ error: err.msg || "Internal server error" });
   }
 });
 
 app.get("/customers", async (req, res) => {
-  const sql = `
-      SELECT c.*,
-             COUNT(p.tracking_number) AS package_count
-      FROM customers c
-      LEFT JOIN packages p
-             ON c.customer_id = p.customer_id
-      WHERE NOT EXISTS (
-          SELECT 1
-          FROM items i
-          WHERE i.tracking_number = p.tracking_number
-          GROUP BY i.tracking_number
-          HAVING MIN(i.item_status) = 1 AND MAX(i.item_status) = 1
-      )
-      GROUP BY c.customer_id
-      ORDER BY c.customer_date DESC
-    `;
+  const { emp_id, target_emp_id } = req.query;
+  if (!emp_id) return res.status(400).json({ error: "emp_id is required" });
   try {
-    const rows = await q(sql);
-    return res.json(rows);
+    await switchToEmployeeDB(emp_id, target_emp_id);
+    const rows = await q(
+      `SELECT c.*,
+              COUNT(p.tracking_number) AS package_count
+       FROM customers c
+       LEFT JOIN packages p ON c.customer_id = p.customer_id
+       WHERE NOT EXISTS (
+         SELECT 1
+         FROM items i
+         WHERE i.tracking_number = p.tracking_number
+           AND i.item_status = 1
+       )
+       GROUP BY c.customer_id
+       ORDER BY c.customer_date DESC;`
+    );
+    res.json(rows);
   } catch (err) {
-    console.error("Error fetching customers:", err.message);
-    return res.status(500).json({ error: "Failed to fetch data" });
+    console.error("Error in /customers:", err);
+    res
+      .status(err.status || 500)
+      .json({ error: err.msg || "Internal server error" });
   }
 });
 
@@ -355,17 +376,6 @@ function q(sql, params = []) {
     db.query(sql, params, (err, rows) => (err ? reject(err) : resolve(rows)));
   });
 }
-
-/* --------------------------- 1. /allcustomers --------------------------- */
-app.get("/allcustomers", async (req, res) => {
-  try {
-    const rows = await q("SELECT * FROM customers ORDER BY customer_date DESC");
-    return res.json(rows);
-  } catch (err) {
-    console.error("Error fetching all customers:", err.message);
-    return res.status(500).json({ error: "Failed to fetch data" });
-  }
-});
 
 /* --------------------------- 2. /customers --------------------------- */
 app.get("/customers", async (req, res) => {
