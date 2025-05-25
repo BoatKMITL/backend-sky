@@ -137,36 +137,61 @@ function q(sql, params = []) {
   });
 }
 
-function switchToEmployeeDB(emp_id) {
-  return new Promise((resolve, reject) => {
-    if (!emp_id) return resolve(); // ไม่ได้ส่ง emp_id มาก็ไม่ต้องสลับ DB
+/**
+ * สลับ DB ตาม actingEmpId และ (optional) targetEmpId
+ * @param {string} actingEmpId — emp_id ของผู้เรียก (เช็ค role)
+ * @param {string=} targetEmpId — emp_id ของบริษัทเป้าหมาย (กรณี role=operation)
+ */
+async function switchToEmployeeDB(actingEmpId, targetEmpId = null) {
+  if (!actingEmpId) return; // ถ้าไม่มี emp_id ไม่สลับ
 
+  // 1) ดึงข้อมูล acting user
+  const rows = await new Promise((resolve, reject) => {
     companydb.query(
-      "SELECT emp_database, emp_datapass FROM employee WHERE emp_id = ?",
-      [emp_id],
-      (err, rows) => {
-        if (err) return reject({ status: 500, msg: "Database error", err });
-        if (!rows || rows.length === 0)
-          return reject({ status: 404, msg: "Employee not found" });
+      "SELECT emp_database, emp_datapass, role FROM employee WHERE emp_id = ?",
+      [actingEmpId],
+      (err, results) => (err ? reject(err) : resolve(results))
+    );
+  });
+  if (!rows.length) throw { status: 404, msg: "Employee not found" };
+  const { emp_database, emp_datapass, role } = rows[0];
 
-        const { emp_database, emp_datapass } = rows[0];
-        db.changeUser(
-          {
-            user: emp_database,
-            password: emp_datapass,
-            database: emp_database,
-          },
-          (changeErr) => {
-            if (changeErr)
-              return reject({
-                status: 500,
-                msg: "Failed to switch database",
-                err: changeErr,
-              });
-            resolve(); // สลับสำเร็จ
-          }
-        );
-      }
+  // 2) ถ้าเป็น operation ให้ดึง creds ของ targetEmpId แทน
+  let dbName, dbUser, dbPass;
+  if (role === "operation") {
+    if (!targetEmpId)
+      throw { status: 400, msg: "target_emp_id is required for operation" };
+    const tgt = await new Promise((resolve, reject) => {
+      companydb.query(
+        "SELECT emp_database, emp_datapass FROM employee WHERE emp_id = ?",
+        [targetEmpId],
+        (err, results) => (err ? reject(err) : resolve(results))
+      );
+    });
+    if (!tgt.length) throw { status: 404, msg: "Target employee not found" };
+    dbName = tgt[0].emp_database;
+    dbUser = tgt[0].emp_database;
+    dbPass = tgt[0].emp_datapass;
+  } else {
+    // owner/admin ใช้ฐานตัวเอง
+    dbName = emp_database;
+    dbUser = emp_database;
+    dbPass = emp_datapass;
+  }
+
+  // 3) สลับ connection
+  await new Promise((resolve, reject) => {
+    db.changeUser(
+      {
+        host: db.config.host,
+        user: dbUser,
+        password: dbPass,
+        database: dbName,
+      },
+      (err) =>
+        err
+          ? reject({ status: 500, msg: "Failed to switch database", err })
+          : resolve()
     );
   });
 }
@@ -178,6 +203,44 @@ function firstRowOr404(res, rows, notFoundMsg = "Employee not found") {
   }
   return rows[0];
 }
+
+app.get("/super/companies", async (req, res) => {
+  const { emp_id } = req.query;
+  if (!emp_id) {
+    return res.status(400).json({ error: "emp_id is required" });
+  }
+
+  try {
+    // 1) ตรวจสอบ role ของผู้เรียก
+    const [user] = await new Promise((resolve, reject) => {
+      companydb.query(
+        "SELECT role FROM employee WHERE emp_id = ?",
+        [emp_id],
+        (err, results) => (err ? reject(err) : resolve(results))
+      );
+    });
+    if (!user || !["superadmin", "operation"].includes(user.role)) {
+      return res.status(403).json({ error: "Forbidden" });
+    }
+
+    // 2) ดึง list ของบริษัท (เอาตัว owner มา 1 เรคอร์ดต่อบริษัท)
+    const companies = await new Promise((resolve, reject) => {
+      companydb.query(
+        `SELECT emp_id, company_name
+         FROM employee
+         WHERE role = 'owner'
+         ORDER BY company_name`,
+        (err, results) => (err ? reject(err) : resolve(results))
+      );
+    });
+
+    // 3) ส่งกลับ
+    res.json(companies);
+  } catch (err) {
+    console.error("Error in /super/companies:", err);
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
 
 // Login-------------------------------------------------------------------------------------------------------------------
 
@@ -434,13 +497,13 @@ app.post("/deleteCustomer", async (req, res) => {
 
 // Customer-------------------------------------------------------------------------------------------------------------------
 app.get("/customersDetails", async (req, res) => {
-  const { id, emp_id } = req.query;
+  const { id, emp_id, target_emp_id } = req.query;
 
   if (!id)
     return res.status(400).json({ error: "customer_id (id) is required" });
 
   try {
-    await switchToEmployeeDB(emp_id);
+    await switchToEmployeeDB(emp_id, target_emp_id);
     const rows = await q("SELECT * FROM customers WHERE customer_id = ?", [id]);
     return res.json(rows); // *** คืนค่าเหมือนเดิม ***
   } catch (e) {
@@ -465,13 +528,13 @@ app.get("/addressesinfo", async (req, res) => {
 });
 
 app.get("/customersaddresses", async (req, res) => {
-  const { id, emp_id } = req.query;
+  const { id, emp_id, target_emp_id } = req.query;
 
   if (!id)
     return res.status(400).json({ error: "customer_id (id) is required" });
 
   try {
-    await switchToEmployeeDB(emp_id);
+    await switchToEmployeeDB(emp_id, target_emp_id);
     const rows = await q("SELECT * FROM addresses WHERE customer_id = ?", [id]);
     return res.json(rows); // *** คืนค่าเหมือนเดิม ***
   } catch (e) {
@@ -483,11 +546,11 @@ app.get("/customersaddresses", async (req, res) => {
 /* ------------------------- GET /customerspackages ------------------------- */
 // ✔︎ GET /customerspackages (with Date_create AS received_date)
 app.get("/customerspackages", async (req, res) => {
-  const { id, emp_id } = req.query;
+  const { id, emp_id, target_emp_id } = req.query;
 
   try {
     // 1) ถ้ามี emp_id ให้สลับไปใช้ฐานข้อมูลของบริษัทนั้นก่อน
-    await switchToEmployeeDB(emp_id);
+    await switchToEmployeeDB(emp_id, target_emp_id);
 
     // 2) เตรียม SQL พร้อมพารามิเตอร์
     const processedId = id ?? null; // id === undefined → NULL
@@ -530,14 +593,14 @@ app.get("/nullpackages", async (_req, res) => {
 });
 
 app.get("/item", async (req, res) => {
-  const { id, emp_id } = req.query;
+  const { id, emp_id, target_emp_id } = req.query;
 
   if (!id)
     return res.status(400).json({ error: "tracking_number (id) is required" });
 
   try {
     /* สลับฐานบริษัท (ถ้ามี emp_id) */
-    await switchToEmployeeDB(emp_id);
+    await switchToEmployeeDB(emp_id, target_emp_id);
 
     /* ดึงรายการ item */
     const rows = await q(
@@ -1768,7 +1831,7 @@ app.post("/addappoint", async (req, res) => {
   const end_time = `${pickupdate} ${eh}:${em}:00`;
 
   try {
-    await switchToEmployeeDB(emp_id);
+    await switchToEmployeeDB(emp_id, target_emp_id);
     const rows = await q(
       "INSERT INTO `appointment` (`title`, `start_date`, `end_date`, `note`, `customer_id`, `address_pickup`, `phone_pickup`, `name_pickup`, `position`, `vehicle`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
       [
@@ -1813,7 +1876,7 @@ app.post("/addappoint", async (req, res) => {
     .replace("T", " ")
     .replace(".000Z", "");
   try {
-    await switchToEmployeeDB(emp_id);
+    await switchToEmployeeDB(emp_id, target_emp_id);
     const rows = await q(
       "INSERT INTO `appointment` (`title`, `start_date`, `end_date`, `note`, `customer_id`, `address_pickup`, `phone_pickup`, `name_pickup`, `position`, `vehicle`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
       [
@@ -2002,7 +2065,7 @@ app.post("/editsendaddr", async (req, res) => {
 
   try {
     // 1) สลับไปใช้ฐานข้อมูลของบริษัทผ่าน middleware/helper
-    await switchToEmployeeDB(emp_id);
+    await switchToEmployeeDB(emp_id, target_emp_id);
 
     // 2) สร้าง SQL และ params เบื้องต้น
     let sql =
