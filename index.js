@@ -1743,52 +1743,17 @@ app.post("/editpriority", (req, res) => {
 
 // appointment-------------------------------------------------------------------------------------------------------------------
 
-app.post("/addappoint", async (req, res) => {
-  const title = req.body.title;
-  const address_pickup = req.body.address_pickup;
-  const phone_pickup = req.body.phone_pickup;
-  const name_pickup = req.body.name_pickup;
-  const position = req.body.position;
-  const vehicle = req.body.vehicle;
-  const note = req.body.note;
-  const emp_id = req.body.emp_id;
-  const pickupdate = req.body.pickupdate;
-  const pickupTime = req.body.pickupTime;
-
-  // === จุดแก้ไขหลัก ===
-  // ไม่ต้องมี Z, ไม่ต้องใช้ toISOString
-  const start_time = `${pickupdate} ${pickupTime}:00`;
-
-  // เพิ่ม 30 นาที
-  const [sh, sm] = pickupTime.split(":").map(Number);
-  const endDate = new Date(pickupdate);
-  endDate.setHours(sh, sm + 30);
-  const eh = String(endDate.getHours()).padStart(2, "0");
-  const em = String(endDate.getMinutes()).padStart(2, "0");
-  const end_time = `${pickupdate} ${eh}:${em}:00`;
-
-  try {
-    await switchToEmployeeDB(emp_id);
-    const rows = await q(
-      "INSERT INTO `appointment` (`title`, `start_date`, `end_date`, `note`, `customer_id`, `address_pickup`, `phone_pickup`, `name_pickup`, `position`, `vehicle`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
-      [
-        title,
-        start_time,
-        end_time,
-        note,
-        title,
-        address_pickup,
-        phone_pickup,
-        name_pickup,
-        position,
-        vehicle,
-      ]
-    );
-    return res.json(rows);
-  } catch (e) {
-    console.error(e.msg || e.message);
-    return res.status(e.status || 500).json({ error: e.msg || "Error" });
-  }
+app.get("/appointment", (req, res) => {
+  const query =
+    "SELECT *, DATE_FORMAT(start_date, '%Y-%m-%d') AS formatted_start_date FROM appointment WHERE status = 'Pending' AND start_date > CURDATE() - INTERVAL 1 DAY;";
+  db.query(query, (err, results) => {
+    if (err) {
+      console.error("Error fetching data:", err.message);
+      res.status(500).json({ error: "Failed to fetch data" });
+    } else {
+      res.json(results);
+    }
+  });
 });
 
 app.post("/addappoint", async (req, res) => {
