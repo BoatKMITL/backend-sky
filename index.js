@@ -1779,21 +1779,18 @@ app.post("/addappoint", async (req, res) => {
     .replace(".000Z", "");
   try {
     await switchToEmployeeDB(emp_id);
-    const rows = await q(
-      "INSERT INTO `appointment` (`title`, `start_date`, `end_date`, `note`, `customer_id`, `address_pickup`, `phone_pickup`, `name_pickup`, `position`, `vehicle`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);",
-      [
-        title,
-        start_time,
-        end_time,
-        note,
-        title,
-        address_pickup,
-        phone_pickup,
-        name_pickup,
-        position,
-        vehicle,
-      ]
-    );
+    const rows = await q("INSERT INTO `appointment` (`title`, `start_date`, `end_date`, `note`, `customer_id`, `address_pickup`, `phone_pickup`, `name_pickup`, `position`, `vehicle`) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);", [
+      title,
+      start_time,
+      end_time,
+      note,
+      title,
+      address_pickup,
+      phone_pickup,
+      name_pickup,
+      position,
+      vehicle,
+    ]);
     return res.json(rows); // *** คืนค่าเหมือนเดิม ***
   } catch (e) {
     console.error(e.msg || e.message);
@@ -1802,35 +1799,58 @@ app.post("/addappoint", async (req, res) => {
 });
 
 app.post("/editappoint", (req, res) => {
-  const address_id = req.body.address_id;
-  const address_pickup = req.body.address_pickup;
-  const phone_pickup = req.body.phone_pickup;
-  const name_pickup = req.body.name_pickup;
-  const position = req.body.position;
-  const vehicle = req.body.vehicle;
-  const note = req.body.note;
-  const query1 =
-    "UPDATE `appointment` SET `note` = ?, `address_pickup` = ?, `phone_pickup` = ?, `name_pickup` = ?, `position` = ?, `vehicle` = ? WHERE `appointment`.`appoint_id` = ?;";
-  db.query(
-    query1,
-    [
-      note,
-      address_pickup,
-      phone_pickup,
-      name_pickup,
-      position,
-      vehicle,
-      address_id,
-    ],
-    (err, results) => {
-      if (err) {
-        console.error("Error fetching data:", err.message);
-        res.status(500).json({ error: "Failed to fetch data" });
-      } else {
-        res.send("Values Edited");
+  if (req.body.status !== undefined) {
+    const status = req.body.status;
+    const address_id = req.body.address_id;
+    const query1 =
+      "UPDATE `appointment` SET `status` = ? WHERE `appointment`.`appoint_id` = ?;";
+    db.query(
+      query1,
+      [
+        status,
+        address_id,
+      ],
+      (err, results) => {
+        if (err) {
+          console.error("Error fetching data:", err.message);
+          res.status(500).json({ error: "Failed to fetch data" });
+        } else {
+          res.send("Values Edited");
+        }
       }
-    }
-  );
+    );
+  }
+  else {
+    const address_id = req.body.address_id;
+    const address_pickup = req.body.address_pickup;
+    const phone_pickup = req.body.phone_pickup;
+    const name_pickup = req.body.name_pickup;
+    const position = req.body.position;
+    const vehicle = req.body.vehicle;
+    const note = req.body.note;
+    const query1 =
+      "UPDATE `appointment` SET `note` = ?, `address_pickup` = ?, `phone_pickup` = ?, `name_pickup` = ?, `position` = ?, `vehicle` = ? WHERE `appointment`.`appoint_id` = ?;";
+    db.query(
+      query1,
+      [
+        note,
+        address_pickup,
+        phone_pickup,
+        name_pickup,
+        position,
+        vehicle,
+        address_id,
+      ],
+      (err, results) => {
+        if (err) {
+          console.error("Error fetching data:", err.message);
+          res.status(500).json({ error: "Failed to fetch data" });
+        } else {
+          res.send("Values Edited");
+        }
+      }
+    );
+  }
 });
 
 // ThaiBox-------------------------------------------------------------------------------------------------------------------
