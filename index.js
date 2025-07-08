@@ -840,13 +840,14 @@ app.post("/addpackage", (req, res) => {
     customer_id === "MISSINGITEMS" ? null : customer_id;
   const tracking_number = req.body.tracking_number;
   const photo_url = req.body.photo_url;
+  const emp_id = req.body.emp_id;
   if (req.body.packages_cost !== undefined) {
     const packages_cost = req.body.packages_cost;
     const query1 =
-      "INSERT INTO `packages` (`tracking_number`, `customer_id`, `packages_cost`, `photo_url`) VALUES (?, ?, ?, ?);";
+      "INSERT INTO `packages` (`tracking_number`, `customer_id`, `packages_cost`, `photo_url`, `emp_id`) VALUES (?, ?, ?, ?);";
     db.query(
       query1,
-      [tracking_number, processedcustomer_id, packages_cost, photo_url],
+      [tracking_number, processedcustomer_id, packages_cost, photo_url, emp_id],
       (err, results) => {
         if (err) {
           console.error("Error fetching data:", err.message);
