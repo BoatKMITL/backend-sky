@@ -1526,9 +1526,10 @@ app.post("/createslip", (req, res) => {
   const amount = req.body.amount;
   const details = req.body.details;
   const bid = req.body.BoxId;
+  const emp_id = req.body.emp_id;
   const query =
-    "INSERT INTO `slip` (`box_id`, `slip_img`, `price`, `details`) VALUES (?, ?, ?, ?);";
-  db.query(query, [bid, slip, amount, details], (err, results) => {
+    "INSERT INTO `slip` (`box_id`, `slip_img`, `price`, `details`, `emp_id`) VALUES (?, ?, ?, ?, ?);";
+  db.query(query, [bid, slip, amount, details, emp_id], (err, results) => {
     if (err) {
       console.error("Error fetching data:", err.message);
       res.status(500).json({ error: "Failed to fetch data" });
