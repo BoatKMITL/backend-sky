@@ -1102,11 +1102,12 @@ app.post("/addsubbox", (req, res) => {
   const height = req.body.height;
   const img_url = req.body.img_url;
   const items = req.body.items;
+  const emp_id = req.body.emp_id;
   const query1 =
-    "INSERT INTO `subbox` (`box_id`, `weight`, `width`, `b_long`, `height`, `img_url`) VALUES (?, ?, ?, ?, ?, ?);";
+    "INSERT INTO `subbox` (`box_id`, `weight`, `width`, `b_long`, `height`, `img_url`, `emp_id`) VALUES (?, ?, ?, ?, ?, ?, ?);";
   db.query(
     query1,
-    [box_id, weight, width, b_long, height, img_url],
+    [box_id, weight, width, b_long, height, img_url, emp_id],
     (err, results) => {
       if (err) {
         console.error("Error fetching data:", err.message);
