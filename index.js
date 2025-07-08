@@ -572,7 +572,7 @@ app.get("/item", async (req, res) => {
 });
 
 app.post("/additems", async (req, res) => {
-  const { customer_id, tracking_number, items } = req.body;
+  const { customer_id, tracking_number, items, emp_id } = req.body;
 
   /* validation */
   if (!customer_id || !tracking_number || !Array.isArray(items)) {
@@ -591,6 +591,7 @@ app.post("/additems", async (req, res) => {
       it.weight ?? 0,
       null,
       it.photo_url ?? null,
+      emp_id
     ]);
 
   if (values.length === 0) {
@@ -599,7 +600,7 @@ app.post("/additems", async (req, res) => {
 
   try {
     await q(
-      "INSERT INTO items (tracking_number,item_name,item_type,item_subtype,quantity,weight,packer_id,photo_url) VALUES ?",
+      "INSERT INTO items (tracking_number,item_name,item_type,item_subtype,quantity,weight,packer_id,photo_url,emp_id) VALUES ?",
       [values]
     );
 
