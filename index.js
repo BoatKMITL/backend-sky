@@ -2062,6 +2062,20 @@ app.get("/company_info", (req, res) => {
   );
 });
 
+app.get("/all_company", (req, res) => {
+  companydb.query(
+    "SELECT * FROM employee WHERE company_name = username",
+    (err, results) => {
+      if (err) {
+        console.error("Error fetching data:", err.message);
+        res.status(500).json({ error: "Failed to fetch data" });
+      } else {
+        res.json(results);
+      }
+    }
+  );
+});
+
 app.get("/dropdown", (req, res) => {
   const { emp_id } = req.query;
 
