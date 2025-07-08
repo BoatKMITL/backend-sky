@@ -249,6 +249,22 @@ app.post("/logout", (req, res) => {
     }
   );
 });
+
+app.post("/logedit", (req, res) => {
+  const detail = req.body.detail;
+  const type = req.body.type;
+  const emp_id = req.body.emp_id;
+  const query =
+    "INSERT INTO `logedit` (`Detail`, `type`, `emp_id`) VALUES (?, ?, ?);";
+  db.query(query, [detail, type, emp_id], (err, results) => {
+    if (err) {
+      console.error("Error fetching data:", err.message);
+      res.status(500).json({ error: "Failed to fetch data" });
+    } else {
+      res.send("Values inserted");
+    }
+  });
+});
 // Home-------------------------------------------------------------------------------------------------------------------
 app.get("/allcustomers", async (req, res) => {
   try {
