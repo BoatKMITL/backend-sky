@@ -184,8 +184,10 @@ function firstRowOr404(res, rows, notFoundMsg = "Employee not found") {
 app.post("/login", (req, res) => {
   /* แยกสองรูปแบบการล็อกอิน */
   const byEmpId = req.body.emp_id !== undefined && req.body.emp_id !== null;
-
-  /* เลือก SQL และพารามิเตอร์ตามรูปแบบ */
+  const hasValidCredentials = req.body.username?.trim() !== "" && req.body.password?.trim() !== "";
+  if (!byEmpId && !hasValidCredentials) {
+    return res.status(400).json({ error: "Missing or invalid credentials" });
+  }
   const sql = byEmpId
     ? "SELECT * FROM `employee` WHERE `emp_id` = ?"
     : "SELECT * FROM `employee` WHERE `username` = ? AND `password` = ?";
