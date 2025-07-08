@@ -2361,6 +2361,7 @@ app.post("/editwarehoussetting", (req, res) => {
 
 app.get("/employee", (req, res) => {
   const { emp_id } = req.query;
+  console.log(emp_id)
   const query = "SELECT * FROM `employee` WHERE `emp_id` = ?";
   companydb.query(query, [emp_id], (err, results) => {
     if (err) {
