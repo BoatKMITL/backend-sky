@@ -1684,50 +1684,55 @@ app.post("/editbox", (req, res) => {
     });
   } else if (req.body.customer_id !== undefined) {
     const customer_id = req.body.customer_id;
-    const query1 = "UPDATE `box` SET `box_status` = ? WHERE `box_id` = ?;";
-    db.query(query1, [box_status, box_id], (err, results) => {
+    const expires_at = req.body.expires_at;
+
+    const query1 = expires_at !== undefined
+      ? "UPDATE `box` SET `box_status` = ?, `expires_at` = ? WHERE `box_id` = ?;"
+      : "UPDATE `box` SET `box_status` = ? WHERE `box_id` = ?;";
+
+    const queryParams = expires_at !== undefined
+      ? [box_status, expires_at, box_id]
+      : [box_status, box_id];
+
+    db.query(query1, queryParams, (err, results) => {
       if (err) {
         console.error("Error fetching data:", err.message);
         res.status(500).json({ error: "Failed to fetch data" });
       } else {
         if (box_status === "Paid") {
           const query2 = `
-                    UPDATE customers 
-                    SET status = 
-                        CASE 
-                            WHEN EXISTS (
-                                SELECT 1 
-                                FROM items 
-                                WHERE tracking_number IN (
-                                    SELECT tracking_number 
-                                    FROM packages 
-                                    WHERE customer_id = ?
-                                ) AND item_status = 0
-                            ) THEN 'Warehouse'
-                            ELSE NULL
-                        END
-                    WHERE customer_id =?;`;
+          UPDATE customers 
+          SET status = 
+            CASE 
+              WHEN EXISTS (
+                SELECT 1 
+                FROM items 
+                WHERE tracking_number IN (
+                  SELECT tracking_number 
+                  FROM packages 
+                  WHERE customer_id = ?
+                ) AND item_status = 0
+              ) THEN 'Warehouse'
+              ELSE NULL
+            END
+          WHERE customer_id = ?;`;
           db.query(query2, [customer_id, customer_id], (err, results) => {
             if (err) {
               console.error("Error updating customer status:", err.message);
-              res
-                .status(500)
-                .json({ error: "Failed to update customer status" });
+              res.status(500).json({ error: "Failed to update customer status" });
             } else {
               res.send("Values Added and Customer Status Updated");
             }
           });
         } else {
           const query2 = `
-                    UPDATE customers 
-                    SET status = 'Unpaid' 
-                    WHERE customer_id =?;`;
+          UPDATE customers 
+          SET status = 'Unpaid' 
+          WHERE customer_id = ?;`;
           db.query(query2, [customer_id], (err, results) => {
             if (err) {
               console.error("Error updating customer status:", err.message);
-              res
-                .status(500)
-                .json({ error: "Failed to update customer status" });
+              res.status(500).json({ error: "Failed to update customer status" });
             } else {
               res.send("Values Added and Customer Status Updated");
             }
