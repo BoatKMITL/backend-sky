@@ -517,8 +517,7 @@ app.get("/customerspackages", async (req, res) => {
         COALESCE(SUM(CASE WHEN i.item_status = 1 THEN 1 ELSE 0 END), 0) AS sum1
       FROM packages p
       LEFT JOIN items i ON p.tracking_number = i.tracking_number
-      WHERE ${
-        processedId === null ? "p.customer_id IS NULL" : "p.customer_id = ?"
+      WHERE ${processedId === null ? "p.customer_id IS NULL" : "p.customer_id = ?"
       }
       GROUP BY p.tracking_number;
     `;
@@ -1737,8 +1736,18 @@ app.post("/editbox", (req, res) => {
       }
     });
   } else {
-    const query1 = "UPDATE `box` SET `box_status` = ? WHERE `box_id` = ?;";
-    db.query(query1, [box_status, box_id], (err, results) => {
+    const expires_at = req.body.expires_at;
+
+    // ถ้ามี expires_at ให้ update เพิ่มด้วย
+    const query1 = expires_at !== undefined
+      ? "UPDATE `box` SET `box_status` = ?, `expires_at` = ? WHERE `box_id` = ?;"
+      : "UPDATE `box` SET `box_status` = ? WHERE `box_id` = ?;";
+
+    const queryParams = expires_at !== undefined
+      ? [box_status, expires_at, box_id]
+      : [box_status, box_id];
+
+    db.query(query1, queryParams, (err, results) => {
       if (err) {
         console.error("Error fetching data:", err.message);
         res.status(500).json({ error: "Failed to fetch data" });
