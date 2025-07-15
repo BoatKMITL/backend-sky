@@ -1624,9 +1624,17 @@ app.post("/editbox", (req, res) => {
     const bprice = req.body.bprice;
     const customer_id = req.body.customer_id;
     const document = req.body.document;
-    const query1 =
-      "UPDATE `box` SET `box_status` = ?, `bprice` = ?, `document` = ? WHERE `box_id` = ?;";
-    db.query(query1, [box_status, bprice, document, box_id], (err, results) => {
+    const expires_at = req.body.expires_at;
+
+    const query1 = expires_at !== undefined
+      ? "UPDATE box SET box_status = ?, bprice = ?, document = ?, expires_at = ? WHERE box_id = ?"
+      : "UPDATE box SET box_status = ?, bprice = ?, document = ? WHERE box_id = ?";
+
+    const queryParams = expires_at !== undefined
+      ? [box_status, bprice, document, expires_at, box_id]
+      : [box_status, bprice, document, box_id];
+
+    db.query(query1, queryParams, (err, results) => {
       if (err) {
         console.error("Error fetching data:", err.message);
         res.status(500).json({ error: "Failed to fetch data" });
