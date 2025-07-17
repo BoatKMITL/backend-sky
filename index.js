@@ -3015,20 +3015,23 @@ app.get("/searchByTracking", async (req, res) => {
   const { trackingNumber } = req.query;
 
   try {
-    // Example query
-    const result = await db.query(
+    const [rows] = await db.query(
       `
-            SELECT customers.customer_id, customers.contact, customers.type, customers.level, customers.note
-            FROM customers
-            INNER JOIN packages ON customers.customer_id = packages.customer_id
-            WHERE packages.tracking_number = ?
-        `,
+        SELECT 
+          customers.customer_id, 
+          customers.contact, 
+          customers.type, 
+          customers.level, 
+          customers.note
+        FROM customers
+        INNER JOIN packages 
+          ON customers.customer_id = packages.customer_id
+        WHERE packages.tracking_number = ?
+      `,
       [trackingNumber]
     );
 
-    // Convert result to plain JSON
-    const plainResult = JSON.parse(JSON.stringify(result));
-    res.json(plainResult);
+    res.json(rows);
   } catch (error) {
     console.error("Error fetching customer by tracking number:", error);
     res.status(500).send("Error fetching customer");
