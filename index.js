@@ -3013,27 +3013,23 @@ app.post("/uploadDocument", uploadDocument.single("document"), (req, res) => {
 // มั่วอันนี้
 app.get("/searchByTracking", async (req, res) => {
   const { trackingNumber } = req.query;
+  console.log("📦 Searching tracking:", trackingNumber);
 
   try {
     const [rows] = await db.query(
       `
-        SELECT 
-          customers.customer_id, 
-          customers.contact, 
-          customers.type, 
-          customers.level, 
-          customers.note
-        FROM customers
-        INNER JOIN packages 
-          ON customers.customer_id = packages.customer_id
-        WHERE packages.tracking_number = ?
+      SELECT customers.customer_id, customers.contact, customers.type, customers.level, customers.note
+      FROM customers
+      INNER JOIN packages ON customers.customer_id = packages.customer_id
+      WHERE packages.tracking_number = ?
       `,
       [trackingNumber]
     );
 
+    console.log("✅ Query result:", rows);
     res.json(rows);
   } catch (error) {
-    console.error("Error fetching customer by tracking number:", error);
+    console.error("❌ SQL error:", error); // ดูตรงนี้
     res.status(500).send("Error fetching customer");
   }
 });
